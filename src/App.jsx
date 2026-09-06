@@ -32,7 +32,11 @@ if (typeof window !== "undefined") {
       return { key, value, shared: false };
     },
     async delete(key) {
-      await supabase.from('app_data').delete().eq('key', key);
+      const { error } = await supabase.from('app_data').delete().eq('key', key);
+      if (error) {
+        console.error("Supabase silme hatasi:", error);
+        return { key, deleted: false, error };
+      }
       return { key, deleted: true, shared: false };
     },
     async list(prefix) {
