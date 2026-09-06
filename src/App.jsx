@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = 'https://bsajwcplambqjhitwkew.supabase.co'
-const SUPABASE_ANON_KEY = 'SENIN_ANON_KEY_BURAYA' // Supabase Settings > API kısmından aldığın public anon key'i buraya yapıştır
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3BsYW1icWpoaXR3a2V3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjA5ODMsImV4cCI6MjEwNDI5Njk4M30.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ' // Supabase Settings > API kısmından aldığın public anon key'i buraya yapıştır
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 import { useState, useEffect, useMemo } from "react";
