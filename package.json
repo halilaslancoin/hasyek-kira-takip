@@ -1,0 +1,40 @@
+{
+  "name": "hasyek-kira-takip",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "electron .",
+    "pack": "electron-builder --mac"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "lucide-react": "^0.383.0",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.4.0"
+  },
+  "build": {
+    "appId": "com.hasyek.kiratakip",
+    "productName": "HasYek Kira Takip",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js"
+    ],
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.icns"
+    }
+  }
+}
