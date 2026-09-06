@@ -20,8 +20,10 @@ import {
 if (typeof window !== "undefined") {
   window.storage = {
     async get(key) {
-      const { data, error } = await supabase.from('app_data').select('value').eq('key', key).single();
-      if (error || !data) throw new Error("key not found: " + key);
+      const { data, error } = await supabase.from('app_data').select('value').eq('key', key).maybeSingle();
+      if (error || !data) {
+        return { key, value: null, shared: false }; // Hata fırlatmak yerine boş döndürerek veri silinmesini önler
+      }
       return { key, value: data.value, shared: false };
     },
     async set(key, value) {
