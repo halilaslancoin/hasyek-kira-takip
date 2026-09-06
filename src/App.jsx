@@ -1,3 +1,9 @@
+import { createClient } from '@supabase/supabase-js'
+
+const SUPABASE_URL = 'https://bsajwcplambqjhitwkew.supabase.co'
+const SUPABASE_ANON_KEY = 'SENIN_ANON_KEY_BURAYA' // Supabase Settings > API kısmından aldığın public anon key'i buraya yapıştır
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 import { useState, useEffect, useMemo } from "react";
 import {
   Home, Store, Users, Wrench, Menu as MenuIcon, Bell, LayoutGrid, List as ListIcon,
@@ -11,25 +17,25 @@ import {
   ResponsiveContainer, Legend
 } from "recharts";
 
-if (typeof window !== "undefined" && !window.storage) {
+if (typeof window !== "undefined") {
   window.storage = {
     async get(key) {
-      const v = window.localStorage.getItem(key);
-      if (v === null) throw new Error("key not found: " + key);
-      return { key, value: v, shared: false };
+      const { data, error } = await supabase.from('app_data').select('value').eq('key', key).single();
+      if (error || !data) throw new Error("key not found: " + key);
+      return { key, value: data.value, shared: false };
     },
     async set(key, value) {
-      window.localStorage.setItem(key, value);
+      const { error } = await supabase.from('app_data').upsert({ key, value });
+      if (error) console.error("Supabase kayit hatasi:", error);
       return { key, value, shared: false };
     },
     async delete(key) {
-      window.localStorage.removeItem(key);
+      await supabase.from('app_data').delete().eq('key', key);
       return { key, deleted: true, shared: false };
     },
     async list(prefix) {
-      const keys = Object.keys(window.localStorage).filter(
-        (k) => !prefix || k.startsWith(prefix)
-      );
+      const { data } = await supabase.from('app_data').select('key');
+      const keys = (data || []).map(d => d.key).filter(k => !prefix || k.startsWith(prefix));
       return { keys };
     },
   };
