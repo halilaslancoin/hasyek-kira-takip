@@ -359,72 +359,119 @@ export default function App() {
   if (!authRole) {
     return (
       <div className="hy-app" style={{ opacity: uiOpacity }}>
-        <div className="hy-login-container">
-          <div className="hy-login-header">
-            <div className="hy-login-logo-img">
-              <img src="/img_9421.png" alt="HasYek Insaat Logo" style={{ width: 180, height: "auto", objectFit: "contain" }} />
+        <div className="hy-landing-split">
+          
+          {/* Sol Kolon: Giriş Kartları */}
+          <div className="hy-landing-left">
+            <div className="hy-landing-brand">
+              <img src="/img_9421.png" alt="HasYek Insaat Logo" style={{ width: 220, height: "auto", objectFit: "contain" }} />
             </div>
-            <h1>Mülk yönetiminiz artık çok daha kolay.</h1>
-            <p>Mülklerinizin takibini ve yönetimini tek bir yerden profesyonelce gerçekleştirin.</p>
-          </div>
+            
+            <div className="hy-landing-headline">
+              <h2>Evinizin yönetimi hayatınızı zorlaştırmasın.</h2>
+              <p>Kişisel hayatınıza ve kazançlarınıza odaklanmanızı sağlarken, kiracıların mutluluğunu, gelecek potansiyellerini ve fırsatlarını da gözetiyoruz.</p>
+            </div>
 
-          <div className="hy-login-cards-grid">
-            <div className="hy-login-card">
-              <div className="hy-login-card-top">
+            <div className="hy-landing-cards-stack">
+              <div className="hy-landing-card">
                 <div>
-                  <h3>Mülk Sahibi</h3>
-                  <p>Mülklerinizi, sözleşmelerinizi ve tahsilatlarınızı yönetmeye başlayın.</p>
+                  <h3>Mülk sahibi</h3>
+                  <p>3 veya daha fazla mülcünüz varsa şimdi yönetmeye başlayın.</p>
                 </div>
-                <div className="hy-login-icon-wrap"><Building2 size={24} /></div>
+                <button className="hy-landing-btn" onClick={() => {
+                  const pin = prompt("Yönetici Şifresini Girin:");
+                  if (pin === (profile.adminPin || "1234")) { setAuthRole("admin"); }
+                  else if (pin) { alert("Hatalı şifre!"); }
+                }}>
+                  Mülk sahibiyim →
+                </button>
               </div>
-              <button className="hy-login-action-btn" onClick={() => {
-                const pin = prompt("Yönetici Şifresini Girin:");
-                if (pin === (profile.adminPin || "1234")) { setAuthRole("admin"); }
-                else if (pin) { alert("Hatalı şifre!"); }
-              }}>
-                Mülk sahibiyim <ArrowRight size={16} />
-              </button>
-            </div>
 
-            <div className="hy-login-card">
-              <div className="hy-login-card-top">
+              <div className="hy-landing-card">
                 <div>
                   <h3>Kiracı</h3>
-                  <p>Kiraladığınız mülk ile ilgili ödeme planına ve bilgilere erişin.</p>
+                  <p>Kiracısı olduğunuz mülk ile ilgili bilgilere erişin.</p>
                 </div>
-                <div className="hy-login-icon-wrap"><Users size={24} /></div>
+                <button className="hy-landing-btn" onClick={() => {
+                  const tName = prompt("Kiracı Adınızı Girin:");
+                  const found = people.find(p => p.role === "Kiracı" && p.name.toLowerCase().includes((tName || "").toLowerCase()));
+                  if (found) {
+                    setAuthRole("tenant");
+                    setCurrentUser(found);
+                  } else {
+                    alert("Kiracı sistemde bulunamadı!");
+                  }
+                }}>
+                  Kiracıyım →
+                </button>
               </div>
-              <button className="hy-login-action-btn" onClick={() => {
-                const tName = prompt("Kiracı Adınızı Girin:");
-                const found = people.find(p => p.role === "Kiracı" && p.name.toLowerCase().includes((tName || "").toLowerCase()));
-                if (found) {
-                  setAuthRole("tenant");
-                  setCurrentUser(found);
-                } else {
-                  alert("Kiracı sistemde bulunamadı!");
-                }
-              }}>
-                Kiracıyım <ArrowRight size={16} />
-              </button>
             </div>
           </div>
+
+          {/* Sağ Kolon: Vizyon ve Özellikler */}
+          <div className="hy-landing-right">
+            <h1>Siz kirayı alın, biz sorunları çözelim.</h1>
+            <p className="hy-landing-sub">Kira takibinden bakım-onarıma, her şeyi sizin yerinize biz üstleniyoruz.</p>
+
+            <div className="hy-landing-features">
+              <div className="hy-landing-feature-item">
+                <div className="hy-landing-feat-icon" style={{ background: "#FEE2E2", color: "#E53935" }}><Banknote size={20} /></div>
+                <div>
+                  <h4>Kira Takibi</h4>
+                  <p>Tüm kira ödemelerini sizin yerinize takip ediyoruz.</p>
+                </div>
+              </div>
+
+              <div className="hy-landing-feature-item">
+                <div className="hy-landing-feat-icon" style={{ background: "#FEF3C7", color: "#F59E0B" }}><Wrench size={20} /></div>
+                <div>
+                  <h4>Bakım ve Onarım</h4>
+                  <p>Kiracı bakım-onarım taleplerini dinliyor, tüm süreci sizin adınıza çözüyoruz.</p>
+                </div>
+              </div>
+
+              <div className="hy-landing-feature-item">
+                <div className="hy-landing-feat-icon" style={{ background: "#DBEAFE", color: "#2563EB" }}><FileText size={20} /></div>
+                <div>
+                  <h4>Hukuki Süreçler</h4>
+                  <p>Sözleşmelerden hukuki işlemlere kadar tüm detaylarda size destek oluyoruz.</p>
+                </div>
+              </div>
+
+              <div className="hy-landing-feature-item">
+                <div className="hy-landing-feat-icon" style={{ background: "#D1FAE5", color: "#10B981" }}><Building2 size={20} /></div>
+                <div>
+                  <h4>Kiracı</h4>
+                  <p>Evinizi hızlıca kiraya veriyor, en iyi geliri hedefliyoruz.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <style>{`
-          .hy-login-container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; width: 100vw; background: rgba(249,250,251, ${uiOpacity}); padding: 40px 20px; }
-          .hy-login-header { text-align: center; max-width: 650px; margin-bottom: 40px; }
-          .hy-login-logo-img { display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px; }
-          .hy-login-header h1 { font-size: 28px; font-weight: 800; color: #111827; margin: 0 0 10px; letter-spacing: -0.5px; }
-          .hy-login-header p { font-size: 15px; color: #4B5563; margin: 0; line-height: 1.5; }
-          .hy-login-cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px; width: 100%; max-width: 740px; }
-          .hy-login-card { background: rgba(255,255,255, ${Math.min(1, uiOpacity + 0.05)}); border: 1px solid #E5E7EB; border-radius: 16px; padding: 28px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 12px rgba(0,0,0,0.03); transition: transform 0.2s, box-shadow 0.2s; }
-          .hy-login-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(0,0,0,0.06); border-color: #D1D5DB; }
-          .hy-login-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; }
-          .hy-login-card-top h3 { font-size: 18px; font-weight: 700; color: #111827; margin: 0 0 6px; }
-          .hy-login-card-top p { font-size: 13.5px; color: #6B7280; margin: 0; line-height: 1.4; }
-          .hy-login-icon-wrap { width: 48px; height: 48px; border-radius: 12px; background: #F3F4F6; color: #374151; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-          .hy-login-action-btn { background: #E53935; color: #fff; border: none; border-radius: 10px; padding: 12px 18px; font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: background 0.2s; width: 100%; }
-          .hy-login-action-btn:hover { background: #C62828; }
+          .hy-landing-split { display: grid; grid-template-columns: 1fr 1.1fr; min-height: 100vh; width: 100vw; background: #fff; }
+          .hy-landing-left { padding: 50px 60px; display: flex; flex-direction: column; justify-content: center; background: #FAF9F6; border-right: 1px solid #E5E7EB; }
+          .hy-landing-brand { margin-bottom: 24px; }
+          .hy-landing-headline h2 { font-size: 24px; font-weight: 800; color: #111827; margin: 0 0 10px; letter-spacing: -0.5px; }
+          .hy-landing-headline p { font-size: 14px; color: #4B5563; margin: 0 0 30px; line-height: 1.5; }
+          .hy-landing-cards-stack { display: flex; flex-direction: column; gap: 16px; }
+          .hy-landing-card { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 16px; padding: 22px 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02); transition: border-color 0.2s; gap: 16px; }
+          .hy-landing-card:hover { border-color: #D1D5DB; }
+          .hy-landing-card h3 { font-size: 16px; font-weight: 700; color: #111827; margin: 0 0 4px; }
+          .hy-landing-card p { font-size: 13px; color: #6B7280; margin: 0; line-height: 1.4; }
+          .hy-landing-btn { background: #E53935; color: #fff; border: none; border-radius: 10px; padding: 10px 16px; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.2s; flex-shrink: 0; }
+          .hy-landing-btn:hover { background: #C62828; }
+          
+          .hy-landing-right { padding: 60px; display: flex; flex-direction: column; justify-content: center; background: #FFFDF9; max-width: 650px; }
+          .hy-landing-right h1 { font-size: 38px; font-weight: 800; color: #111827; margin: 0 0 12px; letter-spacing: -1px; line-height: 1.2; }
+          .hy-landing-sub { font-size: 15px; color: #4B5563; margin: 0 0 36px; line-height: 1.5; }
+          .hy-landing-features { display: flex; flex-direction: column; gap: 24px; }
+          .hy-landing-feature-item { display: flex; align-items: flex-start; gap: 16px; }
+          .hy-landing-feat-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; alignItems: center; justifyContent: center; flex-shrink: 0; }
+          .hy-landing-feature-item h4 { font-size: 15px; font-weight: 700; color: #111827; margin: 0 0 4px; }
+          .hy-landing-feature-item p { font-size: 13.5px; color: #6B7280; margin: 0; line-height: 1.4; }
         `}</style>
       </div>
     );
