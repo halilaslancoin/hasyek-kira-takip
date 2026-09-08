@@ -276,7 +276,6 @@ export default function App() {
     tasinmazNo: "", propertyAd: "", ilce: "", landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.", tenantName: "", tenantPhone: "", tenantTc: "", tenantAddress: "", rentAmount: "", startDate: todayStr(), docUrl: ""
   });
 
-  // Senet Oluşturucu Modalı State'leri
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printNoteData, setPrintNoteData] = useState({
     kesideTarihi: todayStr(),
@@ -322,12 +321,10 @@ export default function App() {
         <div className="hy-login-container">
           <div className="hy-login-header">
             <div className="hy-login-logo-img">
-              <span className="logo-hasyek">HASYEK</span>
-              <div className="logo-line"></div>
-              <span className="logo-insaat">İNŞAAT</span>
+              <img src="/img_9421.png" alt="HasYek Insaat Logo" style={{ width: 180, height: "auto", objectFit: "contain" }} />
             </div>
-            <h1>Mülk yönetiminiz artık çok daha kolay[cite: 3].</h1>
-            <p>Mülklerinizin takibini ve yönetimini tek bir yerden profesyonelce gerçekleştirin[cite: 3].</p>
+            <h1>Mülk yönetiminiz artık çok daha kolay.</h1>
+            <p>Mülklerinizin takibini ve yönetimini tek bir yerden profesyonelce gerçekleştirin.</p>
           </div>
 
           <div className="hy-login-cards-grid">
@@ -375,10 +372,7 @@ export default function App() {
         <style>{`
           .hy-login-container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; width: 100vw; background: #F9FAFB; padding: 40px 20px; }
           .hy-login-header { text-align: center; max-width: 650px; margin-bottom: 40px; }
-          .hy-login-logo-img { display: inline-flex; flex-direction: column; align-items: center; margin-bottom: 16px; }
-          .logo-hasyek { font-size: 32px; font-weight: 800; color: #111C2E; letter-spacing: 1px; }
-          .logo-line { width: 120px; height: 3px; background: #C5A059; margin: 6px 0; }
-          .logo-insaat { font-size: 14px; font-weight: 700; color: #C5A059; letter-spacing: 3px; }
+          .hy-login-logo-img { display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px; }
           .hy-login-header h1 { font-size: 28px; font-weight: 800; color: #111827; margin: 0 0 10px; letter-spacing: -0.5px; }
           .hy-login-header p { font-size: 15px; color: #4B5563; margin: 0; line-height: 1.5; }
           .hy-login-cards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px; width: 100%; max-width: 740px; }
@@ -885,7 +879,6 @@ export default function App() {
     );
   }
 
-  // AYRI BİR HEADER (SEKME) OLAN SENET YÖNETİMİ EKRANI
   function renderSenetlerTab() {
     const missingCount = promissoryNotes.filter(n => n.status === "Eksik").length;
     return (
@@ -980,7 +973,6 @@ export default function App() {
           </table>
         </div>
 
-        {/* Senet Düzenleme & Yazdırma Modalı */}
         {printModalOpen && (
           <Modal title="Senet Taslağı Oluştur ve Yazdır" onClose={() => setPrintModalOpen(false)} wide>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
@@ -1000,7 +992,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Senet Önizleme Alanı */}
               <div id="printable-senet" style={{ background: "#fff", border: "2px solid #111", padding: 20, borderRadius: 8, fontSize: "12px", fontFamily: "monospace", color: "#000" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #111", paddingBottom: 8, marginBottom: 10 }}>
                   <div><strong>Keşide Tarihi:</strong> {fmtDate(printNoteData.kesideTarihi)}</div>
@@ -1246,7 +1237,7 @@ export default function App() {
                 </div>
               )}
 
-              <Field label="Aylık Kira Tutarı*">
+              <Field label="Aylık Kira Bedeli*">
                 <input type="number" value={paymentForm.tutar} onChange={e=>setPaymentForm({...paymentForm, tutar: e.target.value})} />
               </Field>
 
@@ -1675,6 +1666,10 @@ export default function App() {
   }
 
   function renderMuhasebe() {
+    const totalCollectedAll = payments.filter(p => paymentStatus(p) === "Ödendi").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const totalPendingAll = payments.filter(p => paymentStatus(p) === "Bekliyor").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const totalOverdueAll = payments.filter(p => paymentStatus(p) === "Gecikti").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
     return (
       <>
         <div className="hy-topbar">
@@ -1684,14 +1679,64 @@ export default function App() {
             <button className={"hy-pill" + (acctSubTab === "excel" ? " active" : "")} onClick={() => setAcctSubTab("excel")}>Excel Raporları İndir</button>
           </div>
         </div>
+
         {acctSubTab === "tablo" && (
-          <div className="hy-panel">
-            <h3>Finansal Özet</h3>
-            <p className="muted">Bu ay tahsil edilen: <strong>{fmtMoney(thisMonthCollected)}</strong></p>
-          </div>
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 24 }}>
+              <div style={{ background: "#2E7D32", color: "#fff", borderRadius: 16, padding: 20 }}>
+                <span style={{ fontSize: "13px", opacity: 0.9 }}>Toplam Tahsil Edilen</span>
+                <div style={{ fontSize: "26px", fontWeight: "700", marginTop: 12 }}>{fmtMoney(totalCollectedAll)}</div>
+              </div>
+              <div style={{ background: "#F57C00", color: "#fff", borderRadius: 16, padding: 20 }}>
+                <span style={{ fontSize: "13px", opacity: 0.9 }}>Bekleyen Alacaklar</span>
+                <div style={{ fontSize: "26px", fontWeight: "700", marginTop: 12 }}>{fmtMoney(totalPendingAll)}</div>
+              </div>
+              <div style={{ background: "#C62828", color: "#fff", borderRadius: 16, padding: 20 }}>
+                <span style={{ fontSize: "13px", opacity: 0.9 }}>Geciken Alacaklar</span>
+                <div style={{ fontSize: "26px", fontWeight: "700", marginTop: 12 }}>{fmtMoney(totalOverdueAll)}</div>
+              </div>
+            </div>
+
+            <div className="hy-panel" style={{ padding: 24 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 16 }}>Tüm Ödemeler ve Hareketler</h3>
+              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13.5px" }}>
+                <thead>
+                  <tr style={{ color: "var(--text-soft)", borderBottom: "1px solid var(--border)", background: "#F9FAFB" }}>
+                    <th style={{ padding: "12px" }}>Durum</th>
+                    <th style={{ padding: "12px" }}>Mülk</th>
+                    <th style={{ padding: "12px" }}>Kiracı</th>
+                    <th style={{ padding: "12px" }}>Vade Tarihi</th>
+                    <th style={{ padding: "12px", textAlign: "right" }}>Tutar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.length === 0 ? (
+                    <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "var(--text-soft)" }}>Kayıtlı ödeme hareketi bulunmuyor.</td></tr>
+                  ) : (
+                    payments.map(p => {
+                      const contract = contracts.find(c => c.id === p.contractId);
+                      const prop = properties.find(pr => pr.id === (contract ? contract.propertyId : ""));
+                      const tenant = people.find(t => t.id === (contract ? contract.tenantId : ""));
+                      const st = paymentStatus(p);
+                      return (
+                        <tr key={p.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                          <td style={{ padding: "12px" }}><StatusPill status={st} /></td>
+                          <td style={{ padding: "12px", fontWeight: "600" }}>{prop ? prop.tasinmazNo : "—"}</td>
+                          <td style={{ padding: "12px" }}>{tenant ? tenant.name : "—"}</td>
+                          <td style={{ padding: "12px" }}>{fmtDate(p.dueDate)}</td>
+                          <td style={{ padding: "12px", textAlign: "right", fontWeight: "600" }}>{fmtMoney(p.amount)}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
+
         {acctSubTab === "excel" && (
-          <div className="hy-panel">
+          <div className="hy-panel" style={{ padding: 24 }}>
             <h3>Excel Raporu Olarak İndir</h3>
             <p className="muted">Aylık, yıllık veya günlük tüm gelir-gider hareketlerini Excel formatında bilgisayarınıza indirebilirsiniz.</p>
             <div style={{display: "flex", gap: 10, marginTop: 14}}>
@@ -1740,10 +1785,11 @@ export default function App() {
     );
   }
 
-  function renderMenu() {
+function renderMenu() {
     return (
       <>
-        <div className="hy-topbar"><div><h1 className="hy-page-title">Menü & Ayarlar</h1></div></div>
+        <div className="hy-topbar"><div><h1 className="hy-page-title">Menü & Sistem Yönetimi</h1></div></div>
+        
         <div className="hy-profile-card">
           <div className="hy-avatar lg">{initials(profile.firstName + " " + profile.lastName)}</div>
           <div style={{ flex: 1 }}>
@@ -1753,6 +1799,47 @@ export default function App() {
             }} />
             <span className="muted small">Yönetici</span>
           </div>
+        </div>
+
+        <div className="hy-panel" style={{ padding: 24, border: "1px solid #F87171", background: "#FEF2F2" }}>
+          <h3 style={{ margin: "0 0 8px", color: "#991B1B", fontSize: "16px" }}>Tehlikeli Bölge: Programı Resetle</h3>
+          <p className="muted" style={{ fontSize: "13px", marginBottom: 16, color: "#7F1D1D" }}>
+            Bu işlem; tüm mülkleri, kiracıları, kontratları, ödeme akışını ve senet verilerini tamamen temizleyerek uygulamayı ilk kurulum haline döndürür.
+          </p>
+          <button className="hy-btn primary" style={{ background: "#DC2626", borderColor: "#DC2626" }} onClick={async () => {
+            const confirmPin = prompt("Programı sıfırlamak için yönetici şifresini (PIN) girin:");
+            if (confirmPin === (profile.adminPin || "1234")) {
+              if (confirm("EMİN MİSİNİZ? Tüm veriler kalıcı olarak silinecek ve geri alınamayacak!")) {
+                try {
+                  await Promise.all([
+                    window.storage.delete(STORAGE_KEYS.properties),
+                    window.storage.delete(STORAGE_KEYS.people),
+                    window.storage.delete(STORAGE_KEYS.contracts),
+                    window.storage.delete(STORAGE_KEYS.payments),
+                    window.storage.delete(STORAGE_KEYS.expenses),
+                    window.storage.delete(STORAGE_KEYS.maintenance),
+                    window.storage.delete(STORAGE_KEYS.promissoryNotes),
+                  ]);
+                  setProperties([]);
+                  setPeople([]);
+                  setContracts([]);
+                  setPayments([]);
+                  setExpenses([]);
+                  setMaintenance([]);
+                  setPromissoryNotes([]);
+                  alert("Program başarıyla sıfırlandı.");
+                  setAuthRole(null);
+                } catch (err) {
+                  console.error("Sıfırlama hatası:", err);
+                  alert("Sıfırlama sırasında bir hata oluştu.");
+                }
+              }
+            } else if (confirmPin !== null) {
+              alert("Hatalı şifre!");
+            }
+          }}>
+            Programı Fabrika Ayarlarına Sıfırla
+          </button>
         </div>
       </>
     );
@@ -1772,15 +1859,18 @@ export default function App() {
           color: var(--text); background: var(--bg); display: flex; min-height: 100vh; width: 100%;
         }
         .hy-app * { box-sizing: border-box; }
-        .hy-sidebar { width: 250px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; }
-        .hy-logo { display: flex; align-items: center; gap: 10px; padding: 6px 8px 22px; }
-        .sidebar-logo-box { display: flex; flex-direction: column; }
-        .sidebar-hasyek { font-size: 15px; font-weight: 800; color: #111C2E; letter-spacing: 0.5px; }
-        .sidebar-line { width: 60px; height: 2px; background: #C5A059; margin: 2px 0; }
-        .sidebar-insaat { font-size: 9.5px; font-weight: 700; color: #C5A059; letter-spacing: 2px; }
+        .hy-sidebar { 
+          width: 250px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); 
+          display: flex; flex-direction: column; padding: 20px 14px; position: sticky; top: 0; height: 100vh; 
+          justify-content: flex-start; z-index: 2;
+          background-image: linear-gradient(rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.92)), url('/img_9419.jpg');
+          background-size: cover; background-position: bottom center; background-repeat: no-repeat;
+        }
+        .hy-logo { display: flex; align-items: center; justify-content: center; padding: 4px 0 16px; overflow: hidden; }
+        .hy-logo img { width: 100%; max-width: 180px; height: auto; object-fit: contain; }
         .hy-nav { display: flex; flex-direction: column; gap: 3px; }
         .hy-nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: none; background: none; color: var(--text-soft); font-size: 13.5px; text-align: left; cursor: pointer; }
-        .hy-nav-item:hover { background: var(--bg); color: var(--text); }
+        .hy-nav-item:hover { background: rgba(0,0,0,0.04); color: var(--text); }
         .hy-nav-item.active { background: var(--primary-soft); color: var(--primary-dark); font-weight: 600; }
         .hy-main { flex: 1; min-width: 0; padding: 28px 34px 60px; overflow-x: hidden; }
         .hy-topbar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; gap: 12px; flex-wrap: wrap; }
@@ -1844,31 +1934,25 @@ export default function App() {
         }
         @media (max-width: 980px) {
           .hy-sidebar { width: 76px; padding: 16px 8px; }
-          .sidebar-logo-box, .hy-nav-item span { display: none; }
+          .hy-nav-item span { display: none; }
           .hy-nav-item { justify-content: center; }
         }
       `}</style>
 
       <aside className="hy-sidebar">
-        <div>
-          <div className="hy-logo">
-            <div className="sidebar-logo-box">
-              <span className="sidebar-hasyek">HASYEK</span>
-              <div className="sidebar-line"></div>
-              <span className="sidebar-insaat">İNŞAAT</span>
-            </div>
-          </div>
-          <nav className="hy-nav">
-            {NAV.map((n) => {
-              const Icon = n.icon;
-              return (
-                <button key={n.id} className={"hy-nav-item" + (tab === n.id ? " active" : "")} onClick={() => goTab(n.id)}>
-                  <Icon size={17} /> <span>{n.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+        <div className="hy-logo">
+          <img src="/img_9421.png" alt="HasYek Insaat Logo" />
         </div>
+        <nav className="hy-nav">
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            return (
+              <button key={n.id} className={"hy-nav-item" + (tab === n.id ? " active" : "")} onClick={() => goTab(n.id)}>
+                <Icon size={17} /> <span>{n.label}</span>
+              </button>
+            );
+          })}
+        </nav>
       </aside>
 
       <main className="hy-main">
