@@ -809,7 +809,7 @@ export default function App() {
                 src="/img_9421.png"
                 alt="HasYek Insaat Logo"
                 style={{
-                  width: 180,
+                  width: 210,
                   height: "auto",
                   objectFit: "contain",
                   marginBottom: 15
@@ -5227,18 +5227,18 @@ export default function App() {
 
         <div className="hy-panel" style={{ padding: 24 }}>
           <h3>Banka Ekstresi Yükle / Eşleştir</h3>
-          <input
-            type="file"
-            accept=".csv,.xlsx,.txt,text/plain,application/pdf,image/*"
-            onChange={(e) => {
-              const file = e.target.files[0];
-              if (file) {
-                setYuklenenEkstre(file.name);
-                setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
-              }
-            }}
-            style={{ marginBottom: 12 }}
-          />
+    <input
+  type="file"
+  accept=".csv,.xlsx,.txt,.html,.htm,text/plain,text/html,application/pdf,image/*"
+  onChange={(e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setYuklenenEkstre(file.name);
+      setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
+    }
+  }}
+  style={{ marginBottom: 12 }}
+/>
 
           {yuklenenEkstre && (
             <div
