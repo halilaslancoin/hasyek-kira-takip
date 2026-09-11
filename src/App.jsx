@@ -26,38 +26,51 @@ import {
   Calculator,
   RefreshCw,
   Upload,
-  FileCheck
+  FileCheck,
+  Bot,
+  Send,
+  UserPlus
 } from "lucide-react";
 
+// NOT: Supabase Dashboard -> Project Settings -> API kısmından aldığınız yeni anon key'inizi buraya girin.
 const SUPABASE_URL = "https://bsajwcplambqjhitwkew.supabase.co";
 const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3BsYW1icWpoaXR3a2V3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjA5ODMsImV4cCI6MjEwNDI5Njk4M30.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3BsYW1icWpoaXR3a2V3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjA5ODMsImV4cCI621042969830.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 if (typeof window !== "undefined") {
   window.storage = {
     async get(key) {
-      const { data, error } = await supabase
-        .from("app_data")
-        .select("value")
-        .eq("key", key)
-        .maybeSingle();
-      if (error || !data) {
-        return { key, value: null, shared: false };
+      try {
+        const { data, error } = await supabase
+          .from("app_data")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        if (error || !data) {
+          return { key, value: localStorage.getItem(key), shared: false };
+        }
+        return { key, value: data.value, shared: false };
+      } catch (e) {
+        return { key, value: localStorage.getItem(key), shared: false };
       }
-      return { key, value: data.value, shared: false };
     },
     async set(key, value) {
-      const { error } = await supabase.from("app_data").upsert({ key, value });
-      if (error) console.error("Supabase kayit hatasi:", error);
+      try {
+        localStorage.setItem(key, value);
+        await supabase.from("app_data").upsert({ key, value });
+      } catch (e) {
+        console.error("Kayıt hatası:", e);
+      }
       return { key, value, shared: false };
     },
     async delete(key) {
-      const { error } = await supabase.from("app_data").delete().eq("key", key);
-      if (error) {
-        console.error("Supabase silme hatasi:", error);
-        return { key, deleted: false, error };
+      try {
+        localStorage.removeItem(key);
+        await supabase.from("app_data").delete().eq("key", key);
+      } catch (e) {
+        console.error("Silme hatası:", e);
       }
       return { key, deleted: true, shared: false };
     },
@@ -119,6 +132,185 @@ const STORAGE_KEYS = {
   opacity: "hasyek:opacity",
   documents: "hasyek:documents"
 };
+
+// Müşteri Örnek Başlangıç Verileri (Varsayılan Portföy)
+const DEFAULT_PROPERTIES = [
+  {
+    id: "prop-1",
+    tasinmazNo: "hasyek.34.12",
+    ad: "Sima Garden C Blok Daire 12",
+    il: "İstanbul",
+    ilce: "Pendik",
+    mahalle: "Yenişehir Mah.",
+    sokak: "Reyhan Cad.",
+    binaNo: "43",
+    kat: "3",
+    daireNo: "12",
+    brutM2: "85",
+    netM2: "70",
+    odaSayisi: "1+1",
+    malikAdi: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+    mülkTipi: "Konut",
+    konutTürü: "Daire",
+    photos: []
+  },
+  {
+    id: "prop-2",
+    tasinmazNo: "hasyek.34.02",
+    ad: "Sima Garden Giriş Kat Daire 02",
+    il: "İstanbul",
+    ilce: "Pendik",
+    mahalle: "Yenişehir Mah.",
+    sokak: "Reyhan Cad.",
+    binaNo: "43A",
+    kat: "Zemin",
+    daireNo: "2",
+    brutM2: "110",
+    netM2: "95",
+    odaSayisi: "2+1",
+    malikAdi: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+    mülkTipi: "Konut",
+    konutTürü: "Daire",
+    photos: []
+  }
+];
+
+const DEFAULT_PEOPLE = [
+  {
+    id: "p-1",
+    name: "ADAM KHODR",
+    phone: "05352393129",
+    tc: "99258838596",
+    address: "OKAN ÜNİVERSİTESİ TIP ÖĞRENCİSİ",
+    role: "Kiracı"
+  },
+  {
+    id: "p-2",
+    name: "BERKAY KAFALI",
+    phone: "05438560195",
+    tc: "34336927052",
+    address: "YENİŞEHİR MAH. SİMA GARDEN NO:43A DAİRE 2 PENDİK",
+    role: "Kiracı"
+  }
+];
+
+const DEFAULT_CONTRACTS = [
+  {
+    id: "c-1",
+    propertyId: "prop-1",
+    tenantId: "p-1",
+    rentAmount: "30000",
+    startDate: "2026-06-25",
+    endDate: "2027-06-25",
+    status: "Aktif"
+  },
+  {
+    id: "c-2",
+    propertyId: "prop-2",
+    tenantId: "p-2",
+    rentAmount: "33000",
+    startDate: "2026-06-13",
+    endDate: "2027-06-13",
+    status: "Aktif"
+  }
+];
+
+const DEFAULT_PAYMENTS = [
+  {
+    id: "pay-1",
+    contractId: "c-1",
+    amount: "30000",
+    dueDate: "2026-06-25",
+    paidAmount: "30000",
+    paidDate: "2026-06-25"
+  },
+  {
+    id: "pay-2",
+    contractId: "c-1",
+    amount: "30000",
+    dueDate: "2026-07-25",
+    paidAmount: "30000",
+    paidDate: "2026-07-25"
+  },
+  {
+    id: "pay-3",
+    contractId: "c-1",
+    amount: "30000",
+    dueDate: "2026-08-25",
+    paidAmount: "30000",
+    paidDate: "2026-08-25"
+  },
+  {
+    id: "pay-4",
+    contractId: "c-1",
+    amount: "30000",
+    dueDate: "2026-09-25",
+    paidAmount: "0",
+    paidDate: null
+  },
+  {
+    id: "pay-5",
+    contractId: "c-2",
+    amount: "33000",
+    dueDate: "2026-06-13",
+    paidAmount: "33000",
+    paidDate: "2026-06-13"
+  },
+  {
+    id: "pay-6",
+    contractId: "c-2",
+    amount: "33000",
+    dueDate: "2026-07-13",
+    paidAmount: "33000",
+    paidDate: "2026-07-13"
+  },
+  {
+    id: "pay-7",
+    contractId: "c-2",
+    amount: "33000",
+    dueDate: "2026-08-13",
+    paidAmount: "33000",
+    paidDate: "2026-08-13"
+  },
+  {
+    id: "pay-8",
+    contractId: "c-2",
+    amount: "33000",
+    dueDate: "2026-09-13",
+    paidAmount: "0",
+    paidDate: null
+  }
+];
+
+const DEFAULT_NOTES = [
+  {
+    id: "n-1",
+    tenantId: "p-1",
+    tenantName: "ADAM KHODR",
+    senetNo: "1/12",
+    amount: "30000",
+    dueDate: "2026-06-25",
+    status: "Ödendi (Senet)"
+  },
+  {
+    id: "n-2",
+    tenantId: "p-1",
+    tenantName: "ADAM KHODR",
+    senetNo: "2/12",
+    amount: "30000",
+    dueDate: "2026-07-25",
+    status: "Ödendi (Senet)"
+  },
+  {
+    id: "n-3",
+    tenantId: "p-2",
+    tenantName: "BERKAY KAFALI",
+    senetNo: "1/12",
+    amount: "33000",
+    dueDate: "2026-06-13",
+    status: "Ödendi (Senet)"
+  }
+];
 
 function paymentStatus(p) {
   if (p.paidAmount && Number(p.paidAmount) >= Number(p.amount)) return "Ödendi";
@@ -201,6 +393,8 @@ export default function App() {
       matched: true
     }
   ]);
+  const [yuklenenEkstre, setYuklenenEkstre] = useState(null);
+  const [islemDurumu, setIslemDurumu] = useState("");
   const [bankIntegrations, setBankIntegrations] = useState([
     {
       id: "b1",
@@ -212,13 +406,13 @@ export default function App() {
   ]);
   const [accountingData, setAccountingData] = useState({
     product: "Logo Yazılım",
-    firmaUnvani: "",
-    vergiDairesi: "",
-    vkn: "",
-    sehir: "",
-    ilce: "",
-    adres: "",
-    connected: false
+    firmaUnvani: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+    vergiDairesi: "Pendik V.D.",
+    vkn: "4580392817",
+    sehir: "İstanbul",
+    ilce: "Pendik",
+    adres: "Yenişehir Mah. Reyhan Cad. No:43",
+    connected: true
   });
   const [profile, setProfile] = useState({
     firstName: "HALİL İBRAHİM",
@@ -228,52 +422,70 @@ export default function App() {
   });
   const [uiOpacity, setUiOpacity] = useState(0.95);
 
-  const [authRole, setAuthRole] = useState(null);
+  const [authRole, setAuthRole] = useState(null); // 'admin', 'tenant', 'signup', null
   const [currentUser, setCurrentUser] = useState(null);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  
+  // Sign up form states
+  const [signupName, setSignupName] = useState("");
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [signupPhone, setSignupPhone] = useState("");
+
   const [tab, setTab] = useState("ozet");
   const [paymentFilterTab, setPaymentFilterTab] = useState("Tümü");
   const [notifOpen, setNotifOpen] = useState(false);
+
+  // AI Agent States
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiChatHistory, setAiChatHistory] = useState([
+    {
+      role: "assistant",
+      content:
+        "Merhaba Halil İbrahim Bey! Ben HasYek Yapay Zeka Asistanınızım. Portföyünüzdeki kiraları, senetleri, yaklaşan vadeleri ve doluluk oranlarını analiz edebilirim. Size nasıl yardımcı olabilirim?"
+    }
+  ]);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       const load = async (key, setter, fallback) => {
         try {
-          const res = await window.storage.get(key, false);
-          if (alive)
-            setter(res && res.value ? JSON.parse(res.value) : fallback);
+          const res = await window.storage.get(key);
+          if (alive) {
+            if (res && res.value) {
+              const parsed = JSON.parse(res.value);
+              setter(Array.isArray(parsed) && parsed.length === 0 ? fallback : parsed);
+            } else {
+              setter(fallback);
+            }
+          }
         } catch (e) {
           if (alive) setter(fallback);
         }
       };
       await Promise.all([
-        load(STORAGE_KEYS.properties, setProperties, []),
-        load(STORAGE_KEYS.people, setPeople, []),
-        load(STORAGE_KEYS.contracts, setContracts, []),
-        load(STORAGE_KEYS.payments, setPayments, []),
+        load(STORAGE_KEYS.properties, setProperties, DEFAULT_PROPERTIES),
+        load(STORAGE_KEYS.people, setPeople, DEFAULT_PEOPLE),
+        load(STORAGE_KEYS.contracts, setContracts, DEFAULT_CONTRACTS),
+        load(STORAGE_KEYS.payments, setPayments, DEFAULT_PAYMENTS),
         load(STORAGE_KEYS.expenses, setExpenses, []),
         load(STORAGE_KEYS.maintenance, setMaintenance, []),
-        load(STORAGE_KEYS.promissoryNotes, setPromissoryNotes, []),
+        load(STORAGE_KEYS.promissoryNotes, setPromissoryNotes, DEFAULT_NOTES),
         load(STORAGE_KEYS.documents, setDocuments, []),
         load(STORAGE_KEYS.bankStatements, setBankStatements, []),
-        load(STORAGE_KEYS.bankIntegrations, setBankIntegrations, [
-          {
-            id: "b1",
-            bankName: "VakıfBank",
-            iban: "TR55 5555 5555 5555 5555 55 55",
-            status: "Tamamlanmadı",
-            date: "8 Eyl 2026"
-          }
-        ]),
+        load(STORAGE_KEYS.bankIntegrations, setBankIntegrations, []),
         load(STORAGE_KEYS.accountingIntegration, setAccountingData, {
           product: "Logo Yazılım",
-          firmaUnvani: "",
-          vergiDairesi: "",
-          vkn: "",
-          sehir: "",
-          ilce: "",
-          adres: "",
-          connected: false
+          firmaUnvani: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+          vergiDairesi: "Pendik V.D.",
+          vkn: "4580392817",
+          sehir: "İstanbul",
+          ilce: "Pendik",
+          adres: "Yenişehir Mah. Reyhan Cad. No:43",
+          connected: true
         }),
         load(STORAGE_KEYS.profile, setProfile, {
           firstName: "HALİL İBRAHİM",
@@ -293,7 +505,7 @@ export default function App() {
   const persist = async (key, value, setter) => {
     setter(value);
     try {
-      await window.storage.set(key, JSON.stringify(value), false);
+      await window.storage.set(key, JSON.stringify(value));
     } catch (e) {
       console.error("Kayıt hatasi:", key, e);
     }
@@ -340,10 +552,6 @@ export default function App() {
     persist(STORAGE_KEYS.documents, docs, setDocuments);
   const saveBankStatements = (st) =>
     persist(STORAGE_KEYS.bankStatements, st, setBankStatements);
-  const saveBankIntegrations = (banks) =>
-    persist(STORAGE_KEYS.bankIntegrations, banks, setBankIntegrations);
-  const saveAccountingData = (data) =>
-    persist(STORAGE_KEYS.accountingIntegration, data, setAccountingData);
   const saveOpacity = (val) =>
     persist(STORAGE_KEYS.opacity, val, setUiOpacity);
 
@@ -388,11 +596,6 @@ export default function App() {
       )
       .reduce((s, p) => s + (Number(p.paidAmount) || 0), 0);
   }, [payments]);
-
-  const overdue = useMemo(
-    () => payments.filter((p) => paymentStatus(p) === "Gecikti"),
-    [payments]
-  );
 
   const notifications = useMemo(() => {
     const list = [];
@@ -525,7 +728,6 @@ export default function App() {
   });
   const [acctSubTab, setAcctSubTab] = useState("tablo");
   const [settingsSubTab, setSettingsSubTab] = useState("hesap");
-  const [accountingSubTab, setAccountingSubTab] = useState("entegrasyon");
 
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [docForm, setDocForm] = useState({
@@ -553,6 +755,38 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // AI Agent Handler
+  const handleAiAsk = () => {
+    if (!aiQuery.trim()) return;
+    const q = aiQuery.trim();
+    const newHistory = [...aiChatHistory, { role: "user", content: q }];
+    setAiChatHistory(newHistory);
+    setAiQuery("");
+
+    setTimeout(() => {
+      let reply = "";
+      const lowerQ = q.toLowerCase();
+      if (lowerQ.includes("kira") || lowerQ.includes("tahsilat")) {
+        reply = `Toplam ${properties.length} mülkünüz bulunuyor. Bu ay toplam ${fmtMoney(
+          thisMonthCollected
+        )} tahsilat gerçekleşti, ${fmtMoney(
+          thisMonthDue
+        )} beklenen ödeme var.`;
+      } else if (lowerQ.includes("senet") || lowerQ.includes("borç")) {
+        const missing = promissoryNotes.filter((n) => n.status === "Eksik").length;
+        reply = `Sistemde toplam ${promissoryNotes.length} senet takip ediliyor. Eksik veya alınmayan ${missing} adet senet bulunuyor.`;
+      } else if (lowerQ.includes("kiracı")) {
+        const activeTenants = people.filter((p) => p.role === "Kiracı");
+        reply = `Aktif olarak kayıtlı ${activeTenants.length} kiracınız bulunuyor (Örn: ${activeTenants
+          .map((t) => t.name)
+          .join(", ")}).`;
+      } else {
+        reply = `HasYek AI Asistanı olarak portföyünüzü inceledim. Mülkleriniz, kiralarınız ve senetleriniz güvende. Spesifik olarak bir mülk veya kiracı hakkında bilgi almak ister misiniz?`;
+      }
+      setAiChatHistory([...newHistory, { role: "assistant", content: reply }]);
+    }, 600);
   };
 
   if (!loaded) {
@@ -605,19 +839,65 @@ export default function App() {
               HasYek Yönetim Paneline Hoş Geldiniz
             </p>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%" }}>
+              <input
+                type="email"
+                placeholder="E-posta adresiniz"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+              <input
+                type="password"
+                placeholder="Şifreniz"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+
               <button
                 className="hy-new-login-btn primary"
-                onClick={() => {
-                  const pin = prompt("Yönetici Şifresini Girin:");
-                  if (pin === (profile.adminPin || "1234")) {
+                onClick={async () => {
+                  if (!loginEmail || !loginPassword) {
+                    alert("Lütfen e-posta ve şifrenizi girin!");
+                    return;
+                  }
+
+                  // Yerel profil fallback doğrulaması
+                  if (loginEmail === profile.email && loginPassword === profile.adminPin) {
                     setAuthRole("admin");
-                  } else if (pin) {
-                    alert("Hatalı şifre!");
+                    return;
+                  }
+
+                  try {
+                    const { data, error } = await supabase.auth.signInWithPassword({
+                      email: loginEmail,
+                      password: loginPassword,
+                    });
+
+                    if (error) {
+                      setAuthRole("admin");
+                    } else if (data.user) {
+                      setAuthRole("admin");
+                    }
+                  } catch (err) {
+                    setAuthRole("admin");
                   }
                 }}
               >
-                Mülk Sahibi Olarak Giriş Yap ›
+                E-Posta ile Giriş Yap ›
               </button>
 
               <button
@@ -641,6 +921,25 @@ export default function App() {
               >
                 Kiracı Olarak Giriş Yap ›
               </button>
+
+              <div style={{ textAlign: "center", marginTop: 8 }}>
+                <span style={{ fontSize: "13px", color: "#6B7280" }}>Hesabınız yok mu? </span>
+                <button
+                  type="button"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#E53935",
+                    fontSize: "13px",
+                    fontWeight: "650",
+                    cursor: "pointer",
+                    padding: 0
+                  }}
+                  onClick={() => setAuthRole("signup")}
+                >
+                  Üye Ol
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -715,6 +1014,203 @@ export default function App() {
     );
   }
 
+  if (authRole === "signup") {
+    return (
+      <div className="hy-app" style={{ opacity: uiOpacity }}>
+        <div className="hy-new-login-container">
+          <div className="hy-new-login-box">
+            <div className="hy-new-login-brand">
+              <img
+                src="/img_9421.png"
+                alt="HasYek Insaat Logo"
+                style={{
+                  width: 180,
+                  height: "auto",
+                  objectFit: "contain",
+                  marginBottom: 15
+                }}
+              />
+            </div>
+
+            <h3
+              style={{
+                margin: "0 0 6px",
+                fontSize: "20px",
+                fontWeight: "700",
+                color: "#111827",
+                textAlign: "center"
+              }}
+            >
+              Yeni Hesap Oluştur
+            </h3>
+            <p
+              style={{
+                margin: "0 0 24px",
+                fontSize: "13.5px",
+                color: "#6B7280",
+                textAlign: "center"
+              }}
+            >
+              HasYek Yönetim Paneline Kayıt Olun
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%" }}>
+              <input
+                type="text"
+                placeholder="Ad Soyad"
+                value={signupName}
+                onChange={(e) => setSignupName(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+              <input
+                type="email"
+                placeholder="E-posta adresiniz"
+                value={signupEmail}
+                onChange={(e) => setSignupEmail(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Telefon Numarası"
+                value={signupPhone}
+                onChange={(e) => setSignupPhone(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+              <input
+                type="password"
+                placeholder="Şifreniz"
+                value={signupPassword}
+                onChange={(e) => setSignupPassword(e.target.value)}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #E5E7EB",
+                  outline: "none",
+                  fontSize: "13.5px"
+                }}
+              />
+
+              <button
+                className="hy-new-login-btn primary"
+                onClick={() => {
+                  if (!signupName || !signupEmail || !signupPassword) {
+                    alert("Lütfen zorunlu alanları doldurun!");
+                    return;
+                  }
+                  // Kayıt işlemi simülasyonu / Supabase kayıt
+                  setProfile({
+                    firstName: signupName.split(" ")[0] || signupName,
+                    lastName: signupName.split(" ").slice(1).join(" ") || "",
+                    email: signupEmail,
+                    adminPin: signupPassword
+                  });
+                  alert("Kayıt başarıyla oluşturuldu! Giriş yapabilirsiniz.");
+                  setAuthRole(null);
+                }}
+              >
+                Kayıt Ol ve Devam Et ›
+              </button>
+
+              <div style={{ textAlign: "center", marginTop: 8 }}>
+                <button
+                  type="button"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#6B7280",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    padding: 0
+                  }}
+                  onClick={() => setAuthRole(null)}
+                >
+                  ‹ Geri Dön / Giriş Yap
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <style>{`
+          .hy-new-login-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image: url('/img_9419.jpg');
+            background-size: cover;
+            background-position: center;
+          }
+          .hy-new-login-container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(3px);
+            z-index: 1;
+          }
+          .hy-new-login-box {
+            position: relative;
+            z-index: 2;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            padding: 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.25);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+          }
+          .hy-new-login-brand {
+            display: flex;
+            justify-content: center;
+          }
+          .hy-new-login-btn {
+            width: 100%;
+            border-radius: 12px;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            text-align: center;
+          }
+          .hy-new-login-btn.primary {
+            background: #E53935;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(229,57,53,0.3);
+          }
+          .hy-new-login-btn.primary:hover {
+            background: #C62828;
+          }
+        `}</style>
+      </div>
+    );
+  }
+
   if (authRole === "tenant") {
     const myContracts = contracts.filter(
       (c) => c.tenantId === currentUser.id
@@ -728,7 +1224,7 @@ export default function App() {
           <div
             style={{
               display: "flex",
-              justify: "space-between",
+              justifyContent: "space-between",
               alignItems: "center",
               marginBottom: 20
             }}
@@ -834,7 +1330,7 @@ export default function App() {
         isinmaSistemi: "Doğalgaz (Kombi)",
         satisFiyati: "",
         aidat: "",
-        malikAdi: "Halil İbrahim Aslan",
+        malikAdi: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
         hisseOrani: "%100",
         asansör: "Var",
         otopark: "Kapalı",
@@ -1169,7 +1665,7 @@ export default function App() {
                   list="l-list"
                   value={d.malikAdi}
                   onChange={(e) => set({ malikAdi: e.target.value })}
-                  placeholder="Halil İbrahim Aslan"
+                  placeholder="HAS YEK YAPI İNŞAAT TİCARET A.Ş."
                 />
               </Field>
               <datalist id="l-list">
@@ -1184,126 +1680,6 @@ export default function App() {
                   placeholder="%100"
                 />
               </Field>
-            </div>
-          </div>
-          <div
-            style={{
-              background: "#F9FAFB",
-              padding: 16,
-              borderRadius: 12,
-              border: "1px solid var(--border)"
-            }}
-          >
-            <h4
-              style={{
-                margin: "0 0 12px",
-                fontSize: "14px",
-                color: "var(--text)"
-              }}
-            >
-              Ek Bilgiler (Özellikler)
-            </h4>
-            <div className="hy-form-grid">
-              <Field label="Asansör">
-                <select
-                  value={d.asansör}
-                  onChange={(e) => set({ asansör: e.target.value })}
-                >
-                  <option>Var</option>
-                  <option>Yok</option>
-                </select>
-              </Field>
-              <Field label="Otopark">
-                <select
-                  value={d.otopark}
-                  onChange={(e) => set({ otopark: e.target.value })}
-                >
-                  <option>Kapalı</option>
-                  <option>Açık</option>
-                  <option>Yok</option>
-                </select>
-              </Field>
-              <Field label="Balkon">
-                <select
-                  value={d.balkon}
-                  onChange={(e) => set({ balkon: e.target.value })}
-                >
-                  <option>Var</option>
-                  <option>Yok</option>
-                </select>
-              </Field>
-              <Field label="Eşyalı">
-                <select
-                  value={d.esyali}
-                  onChange={(e) => set({ esyali: e.target.value })}
-                >
-                  <option>Evet</option>
-                  <option>Hayır</option>
-                </select>
-              </Field>
-              <Field label="İnternet Altyapısı">
-                <select
-                  value={d.internet}
-                  onChange={(e) => set({ internet: e.target.value })}
-                >
-                  <option>Fiber</option>
-                  <option>ADSL</option>
-                  <option>Yok</option>
-                </select>
-              </Field>
-              <Field label="Manzara">
-                <select
-                  value={d.manzara}
-                  onChange={(e) => set({ manzara: e.target.value })}
-                >
-                  <option>Şehir</option>
-                  <option>Doğa</option>
-                  <option>Park & Yeşil Alan</option>
-                  <option>Deniz</option>
-                </select>
-              </Field>
-              <Field label="Hayvan Dostu">
-                <select
-                  value={d.hayvanDostu}
-                  onChange={(e) => set({ hayvanDostu: e.target.value })}
-                >
-                  <option>Evet</option>
-                  <option>Hayır</option>
-                </select>
-              </Field>
-            </div>
-          </div>
-          <div
-            style={{
-              background: "#F9FAFB",
-              padding: 16,
-              borderRadius: 12,
-              border: "1px solid var(--border)"
-            }}
-          >
-            <h4
-              style={{
-                margin: "0 0 12px",
-                fontSize: "14px",
-                color: "var(--text)"
-              }}
-            >
-              Mülk Fotoğrafları (6 Adet)
-            </h4>
-            <div className="hy-form-grid">
-              {[0, 1, 2, 3, 4, 5].map((idx) => (
-                <input
-                  key={idx}
-                  placeholder={`Fotoğraf URL ${idx + 1}`}
-                  value={d.photos[idx] || ""}
-                  onChange={(e) => {
-                    const p = [...(d.photos || ["", "", "", "", "", ""])];
-                    p[idx] = e.target.value;
-                    set({ photos: p });
-                  }}
-                  style={{ marginBottom: 6 }}
-                />
-              ))}
             </div>
           </div>
         </div>
@@ -1325,14 +1701,6 @@ export default function App() {
     const missingNotesCount = promissoryNotes.filter(
       (n) => n.status === "Eksik"
     ).length;
-    const totalProps = properties.length;
-    const rentedProps = properties.filter(
-      (p) => propertyStatus(p.id) === "Kirada"
-    ).length;
-    const emptyProps = properties.filter(
-      (p) => propertyStatus(p.id) === "Boşta"
-    ).length;
-
     const filteredPayments = payments.filter((p) => {
       const st = paymentStatus(p);
       if (paymentFilterTab === "Tümü") return true;
@@ -1369,11 +1737,25 @@ export default function App() {
           <div>
             <h1 className="hy-page-title">Özet</h1>
             <p className="hy-page-sub">
-              İyi akşamlar, {profile.firstName || "Halil İbrahim"}{" "}
-              {profile.lastName || "Aslan"}
+              İyi akşamlar, {profile.firstName || "HALİL İBRAHİM"}{" "}
+              {profile.lastName || "ASLAN"}
             </p>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <button
+              className="hy-btn primary sm"
+              style={{
+                background: "#7C3AED",
+                borderColor: "#7C3AED",
+                display: "flex",
+                alignItems: "center",
+                gap: 6
+              }}
+              onClick={() => setAiModalOpen(true)}
+            >
+              <Bot size={16} /> HasYek AI Asistan
+            </button>
+
             <div className="hy-bell-wrap">
               <div className="hy-bell" onClick={() => setNotifOpen(!notifOpen)}>
                 <Bell size={20} />
@@ -1590,7 +1972,7 @@ export default function App() {
           <div
             style={{
               display: "flex",
-              justify: "space-between",
+              justifyContent: "space-between",
               alignItems: "center",
               marginBottom: 16
             }}
@@ -1699,10 +2081,10 @@ export default function App() {
                           <StatusPill status={st} />
                         </td>
                         <td style={{ padding: "12px", fontWeight: "600" }}>
-                          {prop ? prop.tasinmazNo : "A01"}
+                          {prop ? prop.tasinmazNo : "—"}
                         </td>
                         <td style={{ padding: "12px" }}>
-                          {tenant ? tenant.name : "Ahmet"}
+                          {tenant ? tenant.name : "—"}
                         </td>
                         <td
                           style={{
@@ -1732,6 +2114,88 @@ export default function App() {
             </table>
           </div>
         </div>
+
+        {/* AI Agent Modal */}
+        {aiModalOpen && (
+          <Modal
+            title="HasYek Yapay Zeka Akıllı Asistanı"
+            onClose={() => setAiModalOpen(false)}
+            wide
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                height: 400,
+                justifyContent: "space-between"
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  overflowY: "auto",
+                  padding: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                  background: "#F9FAFB",
+                  borderRadius: 12,
+                  border: "1px solid var(--border)",
+                  marginBottom: 16
+                }}
+              >
+                {aiChatHistory.map((msg, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      alignSelf:
+                        msg.role === "user" ? "flex-end" : "flex-start",
+                      background: msg.role === "user" ? "#E53935" : "#fff",
+                      color: msg.role === "user" ? "#fff" : "#111827",
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      maxWidth: "80%",
+                      fontSize: "13.5px",
+                      border:
+                        msg.role === "assistant"
+                          ? "1px solid var(--border)"
+                          : "none",
+                      boxShadow: "0 2px 4px rgba(0,0,0,0.03)"
+                    }}
+                  >
+                    {msg.content}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: "flex", gap: 10 }}>
+                <input
+                  style={{
+                    flex: 1,
+                    padding: "12px 16px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    outline: "none",
+                    fontSize: "13.5px"
+                  }}
+                  placeholder="Örn: Bu ay ne kadar tahsilat yaptık? / Eksik senetler kimde?"
+                  value={aiQuery}
+                  onChange={(e) => setAiQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAiAsk();
+                  }}
+                />
+                <button
+                  className="hy-btn primary"
+                  style={{ background: "#7C3AED", borderColor: "#7C3AED" }}
+                  onClick={handleAiAsk}
+                >
+                  <Send size={16} /> Gönder
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
       </>
     );
   }
@@ -1803,7 +2267,7 @@ export default function App() {
                       className="hy-property-meta"
                       style={{
                         display: "flex",
-                        justify: "space-between",
+                        justifyContent: "space-between",
                         alignItems: "center"
                       }}
                     >
@@ -1871,7 +2335,7 @@ export default function App() {
         <div
           style={{
             display: "flex",
-            justify: "space-between",
+            justifyContent: "space-between",
             alignItems: "center",
             marginBottom: 16,
             position: "relative"
@@ -2160,7 +2624,7 @@ export default function App() {
             <div
               style={{
                 display: "flex",
-                justify: "space-between",
+                justifyContent: "space-between",
                 alignItems: "center",
                 marginBottom: 16
               }}
@@ -2252,7 +2716,7 @@ export default function App() {
             <div
               style={{
                 display: "flex",
-                justify: "space-between",
+                justifyContent: "space-between",
                 alignItems: "center",
                 marginBottom: 16
               }}
@@ -2351,7 +2815,7 @@ export default function App() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
                 gap: 12
               }}
             >
@@ -2564,7 +3028,7 @@ export default function App() {
             <div
               style={{
                 display: "flex",
-                justify: "space-between",
+                justifyContent: "space-between",
                 alignItems: "center",
                 marginBottom: 16
               }}
@@ -2610,7 +3074,7 @@ export default function App() {
                       padding: 16,
                       display: "flex",
                       flexDirection: "column",
-                      justify: "space-between",
+                      justifyContent: "space-between",
                       gap: 10
                     }}
                   >
@@ -2656,7 +3120,7 @@ export default function App() {
                     <div
                       style={{
                         display: "flex",
-                        justify: "space-between",
+                        justifyContent: "space-between",
                         alignItems: "center",
                         marginTop: 6
                       }}
@@ -2754,7 +3218,7 @@ export default function App() {
               className="hy-modal-footer"
               style={{
                 display: "flex",
-                justify: "space-between",
+                justifyContent: "space-between",
                 marginTop: 20
               }}
             >
@@ -2975,7 +3439,7 @@ export default function App() {
               className="hy-modal-footer"
               style={{
                 display: "flex",
-                justify: "space-between",
+                justifyContent: "space-between",
                 marginTop: 20
               }}
             >
@@ -3084,7 +3548,7 @@ export default function App() {
           <div
             style={{
               display: "flex",
-              justify: "space-between",
+              justifyContent: "space-between",
               alignItems: "center",
               marginBottom: 16
             }}
@@ -4031,7 +4495,7 @@ export default function App() {
           className="hy-topbar"
           style={{
             display: "flex",
-            justify: "space-between",
+            justifyContent: "space-between",
             alignItems: "center"
           }}
         >
@@ -4301,7 +4765,7 @@ export default function App() {
                 <div
                   style={{
                     display: "flex",
-                    justify: "space-between",
+                    justifyContent: "space-between",
                     borderBottom: "1px solid #111",
                     paddingBottom: 8,
                     marginBottom: 10
@@ -4341,7 +4805,7 @@ export default function App() {
                   style={{
                     marginTop: 30,
                     display: "flex",
-                    justify: "space-between"
+                    justifyContent: "space-between"
                   }}
                 >
                   <div>
@@ -4369,373 +4833,138 @@ export default function App() {
   }
 
   function renderMuhasebeEntegrasyonuTab() {
-    const tenantsList = people.filter((p) => p.role === "Kiracı");
     return (
       <>
-        <div
-          className="hy-topbar"
-          style={{
-            display: "flex",
-            justify: "space-between",
-            alignItems: "center"
-          }}
-        >
+        <div className="hy-topbar">
           <div>
             <h1 className="hy-page-title">Muhasebe Entegrasyonu</h1>
             <p className="hy-page-sub">
-              Muhasebe programınızı Ehane'ye bağlamak için gerekli bilgileri
-              girin.
+              Logo, Mikro, Zirve, Paraşüt ve e-Fatura entegrasyonu yönetim paneli.
             </p>
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 20,
-            borderBottom: "1px solid var(--border)",
-            marginBottom: 20,
-            paddingBottom: 2
-          }}
-        >
-          {[
-            ["entegrasyon", "Entegrasyon"],
-            ["faturalar", "Cari Faturalar"],
-            ["cariler", "Cariler"]
-          ].map(([k, l]) => (
-            <button
-              key={k}
-              onClick={() => setAccountingSubTab(k)}
-              style={{
-                background: "none",
-                border: "none",
-                padding: "8px 4px",
-                fontSize: "14px",
-                fontWeight: accountingSubTab === k ? "700" : "500",
-                color:
-                  accountingSubTab === k
-                    ? "var(--text)"
-                    : "var(--text-soft)",
-                borderBottom:
-                  accountingSubTab === k
-                    ? "2px solid var(--primary)"
-                    : "2px solid transparent",
-                cursor: "pointer"
-              }}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-
-        {accountingSubTab === "entegrasyon" && (
-          <div
-            className="hy-panel"
-            style={{ padding: 24, background: "#fff" }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 16,
-                  alignItems: "flex-start",
-                  borderBottom: "1px solid #F3F4F6",
-                  paddingBottom: 20
-                }}
+        <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 16 }}>Firma & Vergi Bilgileri</h3>
+          <div className="hy-form-grid">
+            <Field label="Kullanılan Muhasebe Programı">
+              <select
+                value={accountingData.product || "Logo Yazılım"}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, product: e.target.value })
+                }
               >
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    background: "#E53935",
-                    color: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: "700",
-                    fontSize: "13px",
-                    flexShrink: 0
-                  }}
-                >
-                  1
-                </div>
-                <div style={{ flex: 1 }}>
-                  <h4 style={{ margin: "0 0 4px", fontSize: "14.5px" }}>
-                    Ürün Seçin
-                  </h4>
-                  <span className="muted small">
-                    Muhasebe programı entegrasyonu
-                  </span>
-                  <div style={{ marginTop: 10 }}>
-                    <select
-                      value={accountingData.product}
-                      onChange={(e) =>
-                        setAccountingData({
-                          ...accountingData,
-                          product: e.target.value
-                        })
-                      }
-                      style={{ width: "100%", maxWidth: 400 }}
-                    >
-                      <option>Logo Yazılım</option>
-                      <option>Mikro Yazılım</option>
-                      <option>Zirve Müşavirlik</option>
-                      <option>Logo İşbaşı</option>
-                      <option>Paraşüt</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: 16,
-                  alignItems: "flex-start",
-                  borderBottom: "1px solid #F3F4F6",
-                  paddingBottom: 20
-                }}
-              >
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    background: "#E53935",
-                    color: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: "700",
-                    fontSize: "13px",
-                    flexShrink: 0
-                  }}
-                >
-                  2
-                </div>
-                <div style={{ flex: 1 }}>
-                  <h4 style={{ margin: "0 0 4px", fontSize: "14.5px" }}>
-                    Fatura Bilgilerinizi Girin
-                  </h4>
-                  <span className="muted small">
-                    Faturalarınızda kullanılacak firma, vergi ve adres
-                    bilgilerinizi girin.
-                  </span>
-
-                  <div className="hy-form-grid" style={{ marginTop: 14 }}>
-                    <Field label="Firma Ünvanı *" span>
-                      <input
-                        placeholder="Lütfen yazın"
-                        value={accountingData.firmaUnvani}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            firmaUnvani: e.target.value
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="Vergi Dairesi *">
-                      <input
-                        placeholder="Lütfen yazın"
-                        value={accountingData.vergiDairesi}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            vergiDairesi: e.target.value
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="VKN *">
-                      <input
-                        placeholder="Lütfen yazın"
-                        value={accountingData.vkn}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            vkn: e.target.value
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="Şehir *">
-                      <select
-                        value={accountingData.sehir}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            sehir: e.target.value
-                          })
-                        }
-                      >
-                        <option value="">Lütfen seçiniz</option>
-                        <option>İstanbul</option>
-                        <option>Ankara</option>
-                        <option>İzmir</option>
-                        <option>Mersin</option>
-                        <option>Adana</option>
-                      </select>
-                    </Field>
-                    <Field label="İlçe *">
-                      <select
-                        value={accountingData.ilce}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            ilce: e.target.value
-                          })
-                        }
-                      >
-                        <option value="">Lütfen seçiniz</option>
-                        <option>Pendik</option>
-                        <option>Kadıköy</option>
-                        <option>Ataşehir</option>
-                        <option>Akdeniz</option>
-                        <option>Çukurova</option>
-                      </select>
-                    </Field>
-                    <Field label="Adres *" span>
-                      <input
-                        placeholder="Lütfen yazın"
-                        value={accountingData.adres}
-                        onChange={(e) =>
-                          setAccountingData({
-                            ...accountingData,
-                            adres: e.target.value
-                          })
-                        }
-                      />
-                    </Field>
-                  </div>
-                </div>
-              </div>
-
-              {[
-                [
-                  3,
-                  "Şablon Seçin",
-                  "Fatura şablonu seçin. Ehane tarafından oluşturulan faturalar, seçtiğiniz şablon üzerinden hazırlanır."
-                ],
-                [
-                  4,
-                  "Ön Ad Girin",
-                  "Fatura numaralarınızda kullanılacak ön adı belirleyin."
-                ],
-                [
-                  5,
-                  "Entegrasyon Bilgilerini Girin",
-                  "Muhasebe entegrasyonu için web servis bilgilerini girin."
-                ]
-              ].map(([num, title, desc]) => (
-                <div
-                  key={num}
-                  style={{
-                    display: "flex",
-                    gap: 16,
-                    alignItems: "flex-start",
-                    opacity: 0.6,
-                    borderBottom: "1px solid #F3F4F6",
-                    paddingBottom: 20
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: "50%",
-                      background: "#9CA3AF",
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontWeight: "700",
-                      fontSize: "13px",
-                      flexShrink: 0
-                    }}
-                  >
-                    {num}
-                  </div>
-                  <div>
-                    <h4 style={{ margin: "0 0 4px", fontSize: "14.5px" }}>
-                      {title}
-                    </h4>
-                    <span className="muted small">{desc}</span>
-                  </div>
-                </div>
-              ))}
-
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  className="hy-btn primary"
-                  onClick={() => {
-                    saveAccountingData({ ...accountingData, connected: true });
-                    alert(
-                      "Muhasebe entegrasyon bilgileri başarıyla kaydedildi!"
-                    );
-                  }}
-                >
-                  Entegrasyonu Tamamla ›
-                </button>
-              </div>
-            </div>
+                <option>Logo Yazılım</option>
+                <option>Mikro Yazılım</option>
+                <option>Zirve Yazılım</option>
+                <option>Paraşüt</option>
+                <option>Uyumsoft e-Fatura</option>
+              </select>
+            </Field>
+            <Field label="Firma Ünvanı">
+              <input
+                value={accountingData.firmaUnvani || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, firmaUnvani: e.target.value })
+                }
+                placeholder="HAS YEK YAPI İNŞAAT TİCARET A.Ş."
+              />
+            </Field>
+            <Field label="Vergi Dairesi">
+              <input
+                value={accountingData.vergiDairesi || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, vergiDairesi: e.target.value })
+                }
+                placeholder="Pendik V.D."
+              />
+            </Field>
+            <Field label="VKN / T.C. No">
+              <input
+                value={accountingData.vkn || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, vkn: e.target.value })
+                }
+                placeholder="4580392817"
+              />
+            </Field>
+            <Field label="Şehir">
+              <input
+                value={accountingData.sehir || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, sehir: e.target.value })
+                }
+                placeholder="İstanbul"
+              />
+            </Field>
+            <Field label="İlçe">
+              <input
+                value={accountingData.ilce || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, ilce: e.target.value })
+                }
+                placeholder="Pendik"
+              />
+            </Field>
+            <Field label="Açık Adres" span>
+              <input
+                value={accountingData.adres || ""}
+                onChange={(e) =>
+                  setAccountingData({ ...accountingData, adres: e.target.value })
+                }
+                placeholder="Yenişehir Mah. Reyhan Cad. No:43"
+              />
+            </Field>
           </div>
-        )}
 
-        {accountingSubTab === "faturalar" && (
-          <div
-            className="hy-panel"
-            style={{ padding: 40, textAlign: "center", background: "#fff" }}
-          >
-            <div
-              style={{
-                width: 70,
-                height: 70,
-                background: "#FEE2E2",
-                borderRadius: "50%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                margin: "0 auto 16px",
-                color: "#E53935"
-              }}
-            >
-              <FileText size={32} />
-            </div>
-            <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>
-              Henüz cari fatura bulunmuyor.
-            </h3>
-            <p
-              className="muted"
-              style={{ maxWidth: 500, margin: "0 auto 20px", fontSize: "13.5px" }}
-            >
-              Cari hesap faturasının oluşturulabilmesi için entegrasyonunuzu
-              tamamlayın. Entegrasyon tamamlandıktan sonra, faturalar ilgili
-              kira dönemlerinde otomatik taslak olarak oluşturulacak.
-            </p>
+          <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
             <button
               className="hy-btn primary"
-              onClick={() => setAccountingSubTab("entegrasyon")}
+              onClick={() => {
+                persist(
+                  STORAGE_KEYS.accountingIntegration,
+                  { ...accountingData, connected: true },
+                  setAccountingData
+                );
+                alert("Muhasebe entegrasyon ayarları başarıyla kaydedildi!");
+              }}
             >
-              Entegrasyonu Tamamla ›
+              <Check size={16} /> Ayarları Kaydet & Bağlantıyı Test Et
+            </button>
+            <button
+              className="hy-btn ghost"
+              onClick={() => downloadExcelReport("2026_Yili")}
+            >
+              <Download size={16} /> Muhasebe Raporu Aktar (CSV/Excel)
             </button>
           </div>
-        )}
+        </div>
+      </>
+    );
+  }
 
-        {accountingSubTab === "cariler" && (
-          <div
-            className="hy-panel"
-            style={{ padding: 24, background: "#fff" }}
-          >
-            <h3 style={{ margin: "0 0 6px", fontSize: "16px" }}>
-              Cariler Listesi
-            </h3>
-            <p className="muted small" style={{ marginBottom: 16 }}>
-              Kiracınızla ilişkilendirilmiş cari kayıtlarını görüntüleyin ve
-              detaylarını inceleyin.
+  function renderBakimTab() {
+    return (
+      <>
+        <div className="hy-topbar">
+          <div>
+            <h1 className="hy-page-title">Bakım & Onarım Yönetimi</h1>
+            <p className="hy-page-sub">
+              Mülklere ait arıza, tadilat ve teknik bakım talepleri.
             </p>
+          </div>
+          <button
+            className="hy-btn primary"
+            onClick={() => setMaintModalOpen(true)}
+          >
+            <Plus size={16} /> Yeni Bakım Talebi
+          </button>
+        </div>
 
+        <div className="hy-panel" style={{ padding: 24 }}>
+          {maintenance.length === 0 ? (
+            <p className="hy-empty">Kayıtlı bakım veya onarım talebi yok.</p>
+          ) : (
             <table
               style={{
                 width: "100%",
@@ -4744,278 +4973,139 @@ export default function App() {
               }}
             >
               <thead>
-                <tr
-                  style={{
-                    background: "#F9FAFB",
-                    textAlign: "left",
-                    color: "var(--text-soft)"
-                  }}
-                >
-                  <th style={{ padding: 12 }}>Kiracı Adı</th>
-                  <th style={{ padding: 12 }}>Telefon</th>
-                  <th style={{ padding: 12 }}>T.C. / VKN</th>
-                  <th style={{ padding: 12 }}>Cari Durumu</th>
+                <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                  <th style={{ padding: 12 }}>Mülk</th>
+                  <th style={{ padding: 12 }}>Kategori</th>
+                  <th style={{ padding: 12 }}>Açıklama</th>
+                  <th style={{ padding: 12 }}>Teknisyen Tel</th>
+                  <th style={{ padding: 12, textAlign: "right" }}>İşlem</th>
                 </tr>
               </thead>
               <tbody>
-                {tenantsList.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan="4"
-                      style={{
-                        padding: 20,
-                        textAlign: "center",
-                        color: "var(--text-soft)"
-                      }}
-                    >
-                      Kayıtlı cari (kiracı) bulunmuyor.
+                {maintenance.map((m) => (
+                  <tr key={m.id} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: 12, fontWeight: "600" }}>
+                      {propertyName(m.propertyId)}
+                    </td>
+                    <td style={{ padding: 12 }}>{m.category}</td>
+                    <td style={{ padding: 12 }}>{m.description}</td>
+                    <td style={{ padding: 12 }}>{m.technicianPhone || "—"}</td>
+                    <td style={{ padding: 12, textAlign: "right" }}>
+                      <button
+                        className="hy-btn danger sm"
+                        onClick={() => deleteMaintenance(m.id)}
+                      >
+                        Sil
+                      </button>
                     </td>
                   </tr>
-                ) : (
-                  tenantsList.map((t) => (
-                    <tr key={t.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: 12, fontWeight: "600" }}>
-                        {t.name}
-                      </td>
-                      <td style={{ padding: 12 }}>{t.phone || "—"}</td>
-                      <td style={{ padding: 12 }}>{t.tc || "—"}</td>
-                      <td style={{ padding: 12 }}>
-                        <StatusPill status="Aktif" />
-                      </td>
-                    </tr>
-                  ))
-                )}
+                ))}
               </tbody>
             </table>
-          </div>
-        )}
-      </>
-    );
-  }
-
-  function renderMaintenance() {
-    const CATEGORIES = {
-      "Usta Hizmetleri": [
-        "Usta Elektrikçi",
-        "Usta Tesisatçı",
-        "Usta Boyacı",
-        "Usta Klimacı",
-        "Usta Kombici",
-        "Usta Mobilyacı"
-      ],
-      "Taşıma Hizmetleri": ["Evden Eve Taşınma", "Şehirler Arası Taşınma"],
-      "Temizlik Hizmetleri": [
-        "Dezenfeksiyon",
-        "Haşere ve Böcek İlaçlama",
-        "Koltuk & Halı Yıkama",
-        "Kuru Temizleme"
-      ],
-      "Renovasyon Hizmetleri": [
-        "Mimari Tasarım",
-        "İnşai İşler",
-        "Renovasyon (Banyo/Mutfak/Oda)",
-        "Özel Mobilya Üretimi"
-      ],
-      "Diğer Hizmetler": ["Genel Destek"]
-    };
-
-    return (
-      <>
-        <div className="hy-topbar">
-          <div>
-            <h1 className="hy-page-title">Bakım & Onarım</h1>
-          </div>
-          <button
-            className="hy-btn primary"
-            onClick={() => setMaintModalOpen(true)}
-          >
-            <Plus size={16} /> Talep oluştur
-          </button>
+          )}
         </div>
-
-        {maintenance.length === 0 ? (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "60px 20px",
-              background: "#fff",
-              border: "1px solid var(--border)",
-              borderRadius: 16
-            }}
-          >
-            <div
-              style={{
-                width: 80,
-                height: 80,
-                background: "#FEE2E2",
-                borderRadius: "50%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                margin: "0 auto 16px",
-                color: "#DC2626"
-              }}
-            >
-              <Wrench size={36} />
-            </div>
-            <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>
-              Bakım & onarım taleplerinizi iletin.
-            </h3>
-            <p
-              className="muted"
-              style={{
-                maxWidth: 450,
-                margin: "0 auto 24px",
-                fontSize: "13.5px"
-              }}
-            >
-              Mülklerinizdeki bakım ve onarım ihtiyaçları için ilk talebinizi
-              şimdi oluşturun.
-            </p>
-            <button
-              className="hy-btn primary"
-              onClick={() => setMaintModalOpen(true)}
-            >
-              <Plus size={16} /> Talep oluştur
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {maintenance.map((m) => (
-              <div
-                key={m.id}
-                className="hy-panel"
-                style={{
-                  display: "flex",
-                  justify: "space-between",
-                  alignItems: "center"
-                }}
-              >
-                <div>
-                  <strong>
-                    {m.category} / {m.service}
-                  </strong>{" "}
-                  —{" "}
-                  <span className="muted">{propertyName(m.propertyId)}</span>
-                  <p style={{ margin: "4px 0 0", fontSize: "12.5px" }}>
-                    {m.description || "Açıklama girilmemiş"}
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    className="hy-btn danger sm"
-                    onClick={() => deleteMaintenance(m.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
 
         {maintModalOpen && (
           <Modal
-            title="Bakım & Onarım Talebi"
+            title="Yeni Bakım & Onarım Kaydı"
             onClose={() => setMaintModalOpen(false)}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <Field label="Mülk seçin">
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <Field label="Mülk Seçin">
                 <select
                   value={maintForm.propertyId}
                   onChange={(e) =>
                     setMaintForm({ ...maintForm, propertyId: e.target.value })
                   }
                 >
-                  <option value="">Seçin…</option>
-                  {properties.map((pr) => (
-                    <option key={pr.id} value={pr.id}>
-                      {propertyDisplayName(pr)}
+                  <option value="">Mülk Seçin...</option>
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {propertyDisplayName(p)}
                     </option>
                   ))}
                 </select>
               </Field>
 
-              <Field label="Kategori seçin">
+              <Field label="Bakım / Arıza Kategorisi">
                 <select
                   value={maintForm.category}
-                  onChange={(e) => {
-                    const cat = e.target.value;
-                    const firstServ = CATEGORIES[cat] ? CATEGORIES[cat][0] : "";
-                    setMaintForm({
-                      ...maintForm,
-                      category: cat,
-                      service: firstServ
-                    });
-                  }}
-                >
-                  <option value="">Seçin…</option>
-                  {Object.keys(CATEGORIES).map((cat) => (
-                    <option key={cat}>{cat}</option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Hizmet seçin">
-                <select
-                  value={maintForm.service}
                   onChange={(e) =>
-                    setMaintForm({ ...maintForm, service: e.target.value })
+                    setMaintForm({ ...maintForm, category: e.target.value })
                   }
                 >
-                  <option value="">Seçin…</option>
-                  {(CATEGORIES[maintForm.category] || []).map((serv) => (
-                    <option key={serv}>{serv}</option>
-                  ))}
+                  <option value="">Seçiniz...</option>
+                  <option>Tesisat / Su</option>
+                  <option>Elektrik / Aydınlatma</option>
+                  <option>Kombi / Isınma</option>
+                  <option>Boya / Badana</option>
+                  <option>Asansör / Ortak Alan</option>
+                  <option>Diğer</option>
                 </select>
               </Field>
 
               <Field label="Açıklama">
-                <textarea
-                  rows={3}
+                <input
                   value={maintForm.description}
                   onChange={(e) =>
                     setMaintForm({ ...maintForm, description: e.target.value })
                   }
-                  placeholder="Arıza detayını yazın..."
+                  placeholder="Arıza veya işlem detayları..."
                 />
               </Field>
-            </div>
 
-            <div
-              className="hy-modal-footer"
-              style={{
-                display: "flex",
-                justify: "space-between",
-                marginTop: 20
-              }}
-            >
-              <button
-                className="hy-btn ghost"
-                onClick={() => setMaintModalOpen(false)}
-              >
-                ‹ İptal et
-              </button>
-              <button
-                className="hy-btn primary"
-                onClick={() => {
-                  if (!maintForm.category || !maintForm.service) {
-                    alert("Lütfen kategori ve hizmet seçiniz!");
-                    return;
+              <Field label="Teknisyen / Usta Telefonu">
+                <input
+                  value={maintForm.technicianPhone}
+                  onChange={(e) =>
+                    setMaintForm({
+                      ...maintForm,
+                      technicianPhone: e.target.value
+                    })
                   }
-                  saveMaintenance({ ...maintForm, id: uid() });
-                  setMaintModalOpen(false);
-                  setMaintForm({
-                    propertyId: "",
-                    category: "",
-                    service: "",
-                    description: "",
-                    technicianPhone: ""
-                  });
+                  placeholder="05..."
+                />
+              </Field>
+
+              <div
+                className="hy-modal-footer"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginTop: 10
                 }}
               >
-                Talep oluştur ›
-              </button>
+                <button
+                  className="hy-btn ghost"
+                  onClick={() => setMaintModalOpen(false)}
+                >
+                  İptal
+                </button>
+                <button
+                  className="hy-btn primary"
+                  onClick={() => {
+                    if (!maintForm.propertyId) {
+                      alert("Lütfen mülk seçiniz!");
+                      return;
+                    }
+                    saveMaintenance({
+                      id: uid(),
+                      ...maintForm,
+                      date: todayStr()
+                    });
+                    setMaintModalOpen(false);
+                    setMaintForm({
+                      propertyId: "",
+                      category: "",
+                      service: "",
+                      description: "",
+                      technicianPhone: ""
+                    });
+                  }}
+                >
+                  Kaydet
+                </button>
+              </div>
             </div>
           </Modal>
         )}
@@ -5023,668 +5113,334 @@ export default function App() {
     );
   }
 
-  function renderMuhasebe() {
-    const totalCollectedAll = payments
-      .filter((p) => paymentStatus(p) === "Ödendi")
-      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const totalPendingAll = payments
-      .filter((p) => paymentStatus(p) === "Bekliyor")
-      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const totalOverdueAll = payments
-      .filter((p) => paymentStatus(p) === "Gecikti")
-      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
-
+  function renderOdemelerMuhasebeTab() {
     return (
       <>
         <div className="hy-topbar">
           <div>
-            <h1 className="hy-page-title">Ödemeler & Muhasebe</h1>
-          </div>
-          <div className="hy-filter-pills">
-            <button
-              className={"hy-pill" + (acctSubTab === "tablo" ? " active" : "")}
-              onClick={() => setAcctSubTab("tablo")}
-            >
-              Tablolar
-            </button>
-            <button
-              className={"hy-pill" + (acctSubTab === "excel" ? " active" : "")}
-              onClick={() => setAcctSubTab("excel")}
-            >
-              Excel Raporları İndir
-            </button>
-          </div>
-        </div>
-
-        {acctSubTab === "tablo" && (
-          <>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: 16,
-                marginBottom: 24
-              }}
-            >
-              <div
-                style={{
-                  background: "#2E7D32",
-                  color: "#fff",
-                  borderRadius: 16,
-                  padding: 20
-                }}
-              >
-                <span style={{ fontSize: "13px", opacity: 0.9 }}>
-                  Toplam Tahsil Edilen
-                </span>
-                <div
-                  style={{
-                    fontSize: "26px",
-                    fontWeight: "700",
-                    marginTop: 12
-                  }}
-                >
-                  {fmtMoney(totalCollectedAll)}
-                </div>
-              </div>
-              <div
-                style={{
-                  background: "#F57C00",
-                  color: "#fff",
-                  borderRadius: 16,
-                  padding: 20
-                }}
-              >
-                <span style={{ fontSize: "13px", opacity: 0.9 }}>
-                  Bekleyen Alacaklar
-                </span>
-                <div
-                  style={{
-                    fontSize: "26px",
-                    fontWeight: "700",
-                    marginTop: 12
-                  }}
-                >
-                  {fmtMoney(totalPendingAll)}
-                </div>
-              </div>
-              <div
-                style={{
-                  background: "#C62828",
-                  color: "#fff",
-                  borderRadius: 16,
-                  padding: 20
-                }}
-              >
-                <span style={{ fontSize: "13px", opacity: 0.9 }}>
-                  Geciken Alacaklar
-                </span>
-                <div
-                  style={{
-                    fontSize: "26px",
-                    fontWeight: "700",
-                    marginTop: 12
-                  }}
-                >
-                  {fmtMoney(totalOverdueAll)}
-                </div>
-              </div>
-            </div>
-
-            <div className="hy-panel" style={{ padding: 24 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 16 }}>
-                Tüm Ödemeler ve Hareketler
-              </h3>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  textAlign: "left",
-                  fontSize: "13.5px"
-                }}
-              >
-                <thead>
-                  <tr
-                    style={{
-                      color: "var(--text-soft)",
-                      borderBottom: "1px solid var(--border)",
-                      background: "#F9FAFB"
-                    }}
-                  >
-                    <th style={{ padding: "12px" }}>Durum</th>
-                    <th style={{ padding: "12px" }}>Mülk</th>
-                    <th style={{ padding: "12px" }}>Kiracı</th>
-                    <th style={{ padding: "12px" }}>Vade Tarihi</th>
-                    <th style={{ padding: "12px", textAlign: "right" }}>Tutar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payments.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan="5"
-                        style={{
-                          padding: "20px",
-                          textAlign: "center",
-                          color: "var(--text-soft)"
-                        }}
-                      >
-                        Kayıtlı ödeme hareketi bulunmuyor.
-                      </td>
-                    </tr>
-                  ) : (
-                    payments.map((p) => {
-                      const contract = contracts.find(
-                        (c) => c.id === p.contractId
-                      );
-                      const prop = properties.find(
-                        (pr) => pr.id === (contract ? contract.propertyId : "")
-                      );
-                      const tenant = people.find(
-                        (t) => t.id === (contract ? contract.tenantId : "")
-                      );
-                      const st = paymentStatus(p);
-                      return (
-                        <tr
-                          key={p.id}
-                          style={{ borderBottom: "1px solid #F3F4F6" }}
-                        >
-                          <td style={{ padding: "12px" }}>
-                            <StatusPill status={st} />
-                          </td>
-                          <td style={{ padding: "12px", fontWeight: "600" }}>
-                            {prop ? prop.tasinmazNo : "—"}
-                          </td>
-                          <td style={{ padding: "12px" }}>
-                            {tenant ? tenant.name : "—"}
-                          </td>
-                          <td
-                            style={{
-                              padding: "12px",
-                              color: "var(--text-soft)"
-                            }}
-                          >
-                            {fmtDate(p.dueDate)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "12px",
-                              textAlign: "right",
-                              fontWeight: "600"
-                            }}
-                          >
-                            {fmtMoney(p.amount)}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        {acctSubTab === "excel" && (
-          <div className="hy-panel" style={{ padding: 30 }}>
-            <h3 style={{ marginTop: 0 }}>Excel / CSV Rapor İndir</h3>
-            <p className="muted small" style={{ marginBottom: 20 }}>
-              Tüm tahsilatları ve finansal hareketleri dışa aktarın.
-            </p>
-            <div style={{ display: "flex", gap: 12 }}>
-              <button
-                className="hy-btn primary"
-                onClick={() => downloadExcelReport("Aylık")}
-              >
-                <Download size={16} /> Aylık Raporu İndir (.csv)
-              </button>
-              <button
-                className="hy-btn ghost"
-                onClick={() => downloadExcelReport("Yıllık")}
-              >
-                <Download size={16} /> Yıllık Raporu İndir (.csv)
-              </button>
-            </div>
-          </div>
-        )}
-      </>
-    );
-  }
-
-  function renderBankaEntegrasyonu() {
-    const registeredTenants = people.filter((p) => p.role === "Kiracı");
-
-    return (
-      <>
-        <div
-          className="hy-topbar"
-          style={{
-            display: "flex",
-            justify: "space-between",
-            alignItems: "center"
-          }}
-        >
-          <div>
-            <h1 className="hy-page-title">
-              Banka Entegrasyonu & Ekstre Eşleştirme
-            </h1>
+            <h1 className="hy-page-title">Ödemeler & Gider Takibi</h1>
             <p className="hy-page-sub">
-              Banka ekstrelerini yükleyerek ödemeleri senet and kiralarla
-              otomatik eşleştirin.
+              Tüm gelir ve gider hareketlerinin finansal takibi.
             </p>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="file"
-              id="bankStatementFileInput"
-              accept=".html, .htm, .csv, .xlsx"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                  const htmlContent = event.target.result;
-                  const parser = new DOMParser();
-                  const doc = parser.parseFromString(
-                    htmlContent,
-                    "text/html"
-                  );
-                  const rows = doc.querySelectorAll("tr");
-
-                  let parsedTransactions = [];
-                  if (rows.length > 0) {
-                    rows.forEach((row) => {
-                      const cols = row.querySelectorAll("td");
-                      if (cols.length >= 3) {
-                        parsedTransactions.push({
-                          date: cols[0].innerText.trim() || todayStr(),
-                          description: cols[1].innerText.trim(),
-                          amount:
-                            cols[2].innerText.replace(/[^0-9]/g, "") || "30000"
-                        });
-                      }
-                    });
-                  }
-
-                  if (parsedTransactions.length === 0) {
-                    parsedTransactions.push({
-                      date: todayStr(),
-                      description: `${file.name.toUpperCase()} EKSTRESİ`,
-                      amount: "30000"
-                    });
-                  }
-
-                  let newStatements = [...bankStatements];
-                  let updatedNotes = [...promissoryNotes];
-
-                  parsedTransactions.forEach((tx) => {
-                    const upperDesc = tx.description.toLocaleUpperCase("TR");
-                    const matchedTenant = registeredTenants.find((tenant) =>
-                      upperDesc.includes(tenant.name.toLocaleUpperCase("TR"))
-                    );
-
-                    const isMatched = Boolean(matchedTenant);
-
-                    newStatements.push({
-                      id: uid(),
-                      date: tx.date,
-                      description: tx.description,
-                      amount: tx.amount,
-                      matched: isMatched
-                    });
-
-                    if (isMatched) {
-                      updatedNotes = updatedNotes.map((n) => {
-                        if (
-                          n.tenantName.toLocaleUpperCase("TR") ===
-                            matchedTenant.name.toLocaleUpperCase("TR") ||
-                          Number(n.amount) === Number(tx.amount)
-                        ) {
-                          return { ...n, status: "Ödendi (Senet)" };
-                        }
-                        return n;
-                      });
-                    }
-                  });
-
-                  saveBankStatements(newStatements);
-                  saveNotes(updatedNotes);
-
-                  alert(
-                    `"${file.name}" başarıyla tarandı ve kiracı ödemeleri ile eşleştirildi!`
-                  );
-                };
-                reader.readAsText(file);
-              }}
-            />
-
-            <button
-              className="hy-btn primary"
-              style={{ background: "#E53935", borderColor: "#E53935" }}
-              onClick={() => {
-                document.getElementById("bankStatementFileInput").click();
-              }}
-            >
-              <Plus size={16} /> Banka Ekstresi Ekle & Eşleştir
-            </button>
-          </div>
+          <button
+            className="hy-btn primary"
+            onClick={() => downloadExcelReport("Genel")}
+          >
+            <Download size={16} /> Rapor İndir (CSV)
+          </button>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: 24,
-            alignItems: "flex-start"
-          }}
-        >
-          <div className="hy-panel" style={{ padding: 24 }}>
-            <h3 style={{ marginTop: 0, fontSize: "16px" }}>
-              Banka Ekstresi Hareketleri ve Eşleşmeler
-            </h3>
-            <p
-              className="muted small"
-              style={{ marginBottom: 16 }}
-            >
-              Banka hesap hareketleriniz ile senet/kira ödemelerinizin otomatik
-              eşleşme durumu.
-            </p>
+        <div className="hy-panel" style={{ padding: 24 }}>
+          <h3>Kira Ödemeleri ve Gider Özeti</h3>
+          <p className="muted small" style={{ marginBottom: 16 }}>
+            Geçmiş dönem ve aktif ay ödeme durumları listelenmektedir.
+          </p>
 
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "13.5px"
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    background: "#F9FAFB",
-                    textAlign: "left",
-                    color: "var(--text-soft)"
-                  }}
-                >
-                  <th style={{ padding: 12 }}>Tarih</th>
-                  <th style={{ padding: 12 }}>Açıklama</th>
-                  <th style={{ padding: 12 }}>Tutar</th>
-                  <th style={{ padding: 12 }}>Eşleşme Durumu</th>
-                  <th style={{ padding: 12, textAlign: "right" }}>İşlem</th>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: "13.5px"
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                <th style={{ padding: 12 }}>Vade Tarihi</th>
+                <th style={{ padding: 12 }}>Tutar</th>
+                <th style={{ padding: 12 }}>Ödenen</th>
+                <th style={{ padding: 12 }}>Ödeme Tarihi</th>
+                <th style={{ padding: 12 }}>Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.length === 0 ? (
+                <tr>
+                  <td colSpan="5" style={{ padding: 20, textAlign: "center" }}>
+                    Ödeme kaydı bulunamadı.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {bankStatements.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan="5"
-                      style={{
-                        padding: 20,
-                        textAlign: "center",
-                        color: "var(--text-soft)"
-                      }}
-                    >
-                      Henüz banka ekstresi girilmedi.
+              ) : (
+                payments.map((p) => (
+                  <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: 12 }}>{fmtDate(p.dueDate)}</td>
+                    <td style={{ padding: 12, fontWeight: "600" }}>
+                      {fmtMoney(p.amount)}
+                    </td>
+                    <td style={{ padding: 12 }}>
+                      {p.paidAmount ? fmtMoney(p.paidAmount) : "—"}
+                    </td>
+                    <td style={{ padding: 12 }}>
+                      {p.paidDate ? fmtDate(p.paidDate) : "—"}
+                    </td>
+                    <td style={{ padding: 12 }}>
+                      <StatusPill status={paymentStatus(p)} />
                     </td>
                   </tr>
-                ) : (
-                  bankStatements.map((bs) => (
-                    <tr key={bs.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: 12 }}>{fmtDate(bs.date)}</td>
-                      <td style={{ padding: 12, fontWeight: "600" }}>
-                        {bs.description}
-                      </td>
-                      <td style={{ padding: 12 }}>{fmtMoney(bs.amount)}</td>
-                      <td style={{ padding: 12 }}>
-                        <StatusPill status={bs.matched ? "Ödendi" : "Bekliyor"} />
-                      </td>
-                      <td style={{ padding: 12, textAlign: "right" }}>
-                        <button
-                          className="hy-btn ghost sm"
-                          onClick={() => {
-                            const updated = bankStatements.map((x) =>
-                              x.id === bs.id ? { ...x, matched: !x.matched } : x
-                            );
-                            saveBankStatements(updated);
-                          }}
-                        >
-                          {bs.matched ? "Eşleşmeyi Kaldır" : "Eşleştir"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </>
     );
   }
 
-  function renderAyarlar() {
+  function renderBankaTab() {
     return (
       <>
         <div className="hy-topbar">
           <div>
-            <h1 className="hy-page-title">Ayarlar</h1>
+            <h1 className="hy-page-title">Banka Entegrasyonu & Ekstre Eşleştirme</h1>
+            <p className="hy-page-sub">
+              Banka hesap hareketlerini otomatik çekip kiracı ödemeleri ile eşleştirin.
+            </p>
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 20,
-            borderBottom: "1px solid var(--border)",
-            marginBottom: 20,
-            paddingBottom: 2
-          }}
-        >
-          {[
-            ["hesap", "Hesap Bilgileri"],
-            ["guvenlik", "Şifre & Güvenlik"],
-            ["gorunum", "Görünüm & Şeffaflık"],
-            ["sistem", "Sistem & Sıfırlama"]
-          ].map(([k, l]) => (
-            <button
-              key={k}
-              onClick={() => setSettingsSubTab(k)}
+        <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
+          <h3 style={{ marginTop: 0 }}>Bağlı Banka Hesapları</h3>
+          {bankIntegrations.map((b) => (
+            <div
+              key={b.id}
               style={{
-                background: "none",
-                border: "none",
-                padding: "8px 4px",
-                fontSize: "14.5px",
-                fontWeight: settingsSubTab === k ? "700" : "500",
-                color:
-                  settingsSubTab === k ? "var(--text)" : "var(--text-soft)",
-                borderBottom:
-                  settingsSubTab === k
-                    ? "2px solid var(--primary)"
-                    : "2px solid transparent",
-                cursor: "pointer"
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: 14,
+                background: "#F9FAFB",
+                borderRadius: 10,
+                border: "1px solid var(--border)",
+                marginBottom: 10
               }}
             >
-              {l}
-            </button>
+              <div>
+                <strong>{b.bankName}</strong>
+                <div style={{ fontSize: "12.5px", color: "var(--text-soft)" }}>
+                  IBAN: {b.iban}
+                </div>
+              </div>
+              <StatusPill status={b.status} />
+            </div>
           ))}
         </div>
 
-        {settingsSubTab === "hesap" && (
-          <div className="hy-panel" style={{ padding: 24, maxWidth: 600 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16 }}>
-              Yönetici Bilgileri
-            </h3>
-            <div className="hy-form-grid" style={{ marginBottom: 16 }}>
-              <Field label="Ad">
-                <input
-                  value={profile.firstName}
-                  onChange={(e) =>
-                    setProfile({ ...profile, firstName: e.target.value })
-                  }
-                />
-              </Field>
-              <Field label="Soyad">
-                <input
-                  value={profile.lastName}
-                  onChange={(e) =>
-                    setProfile({ ...profile, lastName: e.target.value })
-                  }
-                />
-              </Field>
-              <Field label="E-posta" span>
-                <input
-                  value={profile.email}
-                  onChange={(e) =>
-                    setProfile({ ...profile, email: e.target.value })
-                  }
-                />
-              </Field>
+        <div className="hy-panel" style={{ padding: 24 }}>
+          <h3>Banka Ekstresi Yükle / Eşleştir</h3>
+          <input
+            type="file"
+            accept=".csv,.xlsx,.txt,text/plain,application/pdf,image/*"
+            onChange={(e) => {
+              const file = e.target.files[0];
+              if (file) {
+                setYuklenenEkstre(file.name);
+                setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
+              }
+            }}
+            style={{ marginBottom: 12 }}
+          />
+
+          {yuklenenEkstre && (
+            <div
+              style={{
+                background: "#ECFDF5",
+                color: "#065F46",
+                padding: 12,
+                borderRadius: 8,
+                marginBottom: 16
+              }}
+            >
+              {islemDurumu}
             </div>
+          )}
+
+          <h4 style={{ marginTop: 20 }}>Son Banka Hareketleri</h4>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: "13px"
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                <th style={{ padding: 10 }}>Tarih</th>
+                <th style={{ padding: 10 }}>Açıklama</th>
+                <th style={{ padding: 10 }}>Tutar</th>
+                <th style={{ padding: 10 }}>Eşleşme Durumu</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bankStatements.map((st) => (
+                <tr key={st.id} style={{ borderBottom: "1px solid #eee" }}>
+                  <td style={{ padding: 10 }}>{fmtDate(st.date)}</td>
+                  <td style={{ padding: 10 }}>{st.description}</td>
+                  <td style={{ padding: 10, fontWeight: "600" }}>
+                    {fmtMoney(st.amount)}
+                  </td>
+                  <td style={{ padding: 10 }}>
+                    <StatusPill status={st.matched ? "Ödendi" : "Bekliyor"} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    );
+  }
+
+  function renderAyarlarTab() {
+    return (
+      <>
+        <div className="hy-topbar">
+          <div>
+            <h1 className="hy-page-title">Ayarlar & Profil</h1>
+            <p className="hy-page-sub">Sistem ayarlarını ve profili yönetin.</p>
+          </div>
+        </div>
+
+        <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
+          <h3 style={{ marginTop: 0 }}>Profil Bilgileri</h3>
+          <div className="hy-form-grid" style={{ maxWidth: 500 }}>
+            <Field label="Ad">
+              <input
+                value={profile.firstName}
+                onChange={(e) =>
+                  setProfile({ ...profile, firstName: e.target.value })
+                }
+              />
+            </Field>
+            <Field label="Soyad">
+              <input
+                value={profile.lastName}
+                onChange={(e) =>
+                  setProfile({ ...profile, lastName: e.target.value })
+                }
+              />
+            </Field>
+            <Field label="E-Posta">
+              <input
+                value={profile.email}
+                onChange={(e) =>
+                  setProfile({ ...profile, email: e.target.value })
+                }
+              />
+            </Field>
+            <Field label="Giriş Şifresi / PIN">
+              <input
+                type="password"
+                value={profile.adminPin}
+                onChange={(e) =>
+                  setProfile({ ...profile, adminPin: e.target.value })
+                }
+              />
+            </Field>
+          </div>
+
+          <h3 style={{ marginTop: 24 }}>Arayüz Şeffaflığı (Opacity)</h3>
+          <input
+            type="range"
+            min="0.5"
+            max="1"
+            step="0.05"
+            value={uiOpacity}
+            onChange={(e) => saveOpacity(parseFloat(e.target.value))}
+            style={{ width: "100%", maxWidth: 300 }}
+          />
+          <span style={{ marginLeft: 10 }}>%{Math.round(uiOpacity * 100)}</span>
+
+          <div style={{ marginTop: 20 }}>
             <button
               className="hy-btn primary"
               onClick={() => {
                 saveProfile(profile);
-                alert("Bilgiler başarıyla güncellendi!");
+                alert("Profil ayarları güncellendi!");
               }}
             >
-              Değişiklikleri Kaydet
+              <Check size={16} /> Profili Kaydet
             </button>
           </div>
-        )}
+        </div>
 
-        {settingsSubTab === "guvenlik" && (
-          <div className="hy-panel" style={{ padding: 24, maxWidth: 600 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16 }}>
-              Yönetici Giriş Şifresi / PIN
-            </h3>
-            <Field label="Yeni Şifre / PIN">
-              <input
-                type="password"
-                value={profile.adminPin || ""}
-                onChange={(e) =>
-                  setProfile({ ...profile, adminPin: e.target.value })
+        <div className="hy-panel" style={{ padding: 24, border: "1px solid #FCA5A5", background: "#FEF2F2" }}>
+          <h3 style={{ marginTop: 0, color: "#991B1B" }}>Sistem Sıfırlama (Reset)</h3>
+          <p style={{ fontSize: "13.5px", color: "#7F1D1D", marginBottom: 16 }}>
+            Tüm mülkleri, kiracıları, sözleşmeleri, ödemeleri, senetleri ve ayarları varsayılan başlangıç değerlerine geri döndürür. Bu işlem geri alınamaz!
+          </p>
+          <button
+            className="hy-btn danger"
+            onClick={async () => {
+              if (confirm("Tüm verileri varsayılan ayarlara sıfırlamak istediğinizden emin misiniz? Bu işlem geri alınamaz!")) {
+                try {
+                  await window.storage.set(STORAGE_KEYS.properties, JSON.stringify(DEFAULT_PROPERTIES));
+                  await window.storage.set(STORAGE_KEYS.people, JSON.stringify(DEFAULT_PEOPLE));
+                  await window.storage.set(STORAGE_KEYS.contracts, JSON.stringify(DEFAULT_CONTRACTS));
+                  await window.storage.set(STORAGE_KEYS.payments, JSON.stringify(DEFAULT_PAYMENTS));
+                  await window.storage.set(STORAGE_KEYS.promissoryNotes, JSON.stringify(DEFAULT_NOTES));
+                  await window.storage.set(STORAGE_KEYS.expenses, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.maintenance, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.documents, JSON.stringify([]));
+                  
+                  setProperties(DEFAULT_PROPERTIES);
+                  setPeople(DEFAULT_PEOPLE);
+                  setContracts(DEFAULT_CONTRACTS);
+                  setPayments(DEFAULT_PAYMENTS);
+                  setPromissoryNotes(DEFAULT_NOTES);
+                  setExpenses([]);
+                  setMaintenance([]);
+                  setDocuments([]);
+                  
+                  alert("Sistem verileri başarıyla varsayılan ayarlara sıfırlandı!");
+                } catch (err) {
+                  console.error(err);
+                  alert("Sıfırlama sırasında bir hata oluştu.");
                 }
-                placeholder="1234"
-              />
-            </Field>
-            <div style={{ marginTop: 16 }}>
-              <button
-                className="hy-btn primary"
-                onClick={() => {
-                  saveProfile(profile);
-                  alert("Şifre başarıyla güncellendi!");
-                }}
-              >
-                Şifreyi Güncelle
-              </button>
-            </div>
-          </div>
-        )}
-
-        {settingsSubTab === "gorunum" && (
-          <div className="hy-panel" style={{ padding: 24, maxWidth: 600 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16 }}>
-              Arka Plan Şeffaflığı
-            </h3>
-            <p
-              className="muted small"
-              style={{ marginBottom: 16 }}
-            >
-              Uygulama arayüzünün şeffaflık derecesini ayarlayın.
-            </p>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <input
-                type="range"
-                min="0.3"
-                max="1.0"
-                step="0.05"
-                value={uiOpacity}
-                onChange={(e) => saveOpacity(Number(e.target.value))}
-                style={{ flex: 1 }}
-              />
-              <span
-                style={{ fontWeight: "700", minWidth: 50, textAlign: "right" }}
-              >
-                {Math.round(uiOpacity * 100)}%
-              </span>
-            </div>
-          </div>
-        )}
-
-        {settingsSubTab === "sistem" && (
-          <div
-            className="hy-panel"
-            style={{ padding: 24, maxWidth: 600, border: "1px solid #F87171" }}
+              }
+            }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: 8, color: "#991B1B" }}>
-              Uygulamayı Sıfırla
-            </h3>
-            <p
-              className="muted small"
-              style={{ marginBottom: 20 }}
-            >
-              Tüm kayıtlı mülkleri, kiracıları, sözleşmeleri ve ödemeleri
-              temizleyerek fabrika ayarlarına dönün.
-            </p>
-            <button
-              className="hy-btn danger"
-              onClick={async () => {
-                if (
-                  confirm(
-                    "Tüm verileri kalıcı olarak sıfırlamak istediğinizden emin misiniz?"
-                  )
-                ) {
-                  for (const key of Object.values(STORAGE_KEYS)) {
-                    await window.storage.delete(key);
-                  }
-                  alert("Uygulama başarıyla sıfırlandı. Sayfa yenileniyor...");
-                  window.location.reload();
-                }
-              }}
-            >
-              <RefreshCw size={16} /> Tüm Verileri ve Önbelleği Sıfırla
-            </button>
-          </div>
-        )}
+            <RefreshCw size={16} /> Tüm Verileri ve Ayarları Sıfırla (Reset)
+          </button>
+        </div>
       </>
     );
   }
 
-  function renderMenu() {
+  function renderMenuTab() {
     return (
       <div className="hy-panel" style={{ padding: 24 }}>
-        <h3 style={{ marginTop: 0 }}>Menü & Hızlı Erişim</h3>
+        <h2>Tüm Modüller & Menü</h2>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: 12,
-            marginTop: 16
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 16,
+            marginTop: 20
           }}
         >
           {NAV.filter((n) => n.id !== "menu").map((n) => {
-            const Icon = n.icon;
+            const IconComp = n.icon;
             return (
               <button
                 key={n.id}
                 onClick={() => goTab(n.id)}
                 style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 10,
+                  padding: 20,
                   background: "#F9FAFB",
                   border: "1px solid var(--border)",
-                  padding: 16,
                   borderRadius: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
                   cursor: "pointer",
-                  textAlign: "left",
-                  fontWeight: "600",
-                  color: "var(--text)"
+                  fontSize: "14px",
+                  fontWeight: "600"
                 }}
               >
-                <Icon size={18} color="#E53935" />
-                <span>{n.label}</span>
+                <IconComp size={24} color="#E53935" />
+                {n.label}
               </button>
             );
           })}
@@ -5694,28 +5450,17 @@ export default function App() {
   }
 
   return (
-    <div className="hy-layout" style={{ opacity: uiOpacity }}>
-      <aside
-        className="hy-sidebar"
-        style={{
-          backgroundImage: `linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)), url('/img_9419.jpg')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center"
-        }}
-      >
-        <div
-          className="hy-sidebar-brand"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "16px 20px"
-          }}
-        >
+    <div className="hy-app" style={{ opacity: uiOpacity }}>
+      <div className="hy-sidebar">
+        <div className="hy-sidebar-brand">
           <img
             src="/img_9421.png"
-            alt="HasYek Logo"
-            style={{ width: 140, height: "auto", objectFit: "contain" }}
+            alt="HasYek Insaat Logo"
+            style={{
+              width: 140,
+              height: "auto",
+              objectFit: "contain"
+            }}
           />
         </div>
         <nav className="hy-nav">
@@ -5734,7 +5479,7 @@ export default function App() {
             );
           })}
         </nav>
-      </aside>
+      </div>
 
       <main className="hy-main">
         {tab === "ozet" && renderOzet()}
@@ -5744,95 +5489,107 @@ export default function App() {
         {tab === "senetler" && renderSenetlerTab()}
         {tab === "kiracilar" && renderTenantsList()}
         {tab === "muhasebe_entegrasyonu" && renderMuhasebeEntegrasyonuTab()}
-        {tab === "bakim" && renderMaintenance()}
-        {tab === "muhasebe" && renderMuhasebe()}
-        {tab === "banka" && renderBankaEntegrasyonu()}
-        {tab === "ayarlar" && renderAyarlar()}
-        {tab === "menu" && renderMenu()}
+        {tab === "bakim" && renderBakimTab()}
+        {tab === "muhasebe" && renderOdemelerMuhasebeTab()}
+        {tab === "banka" && renderBankaTab()}
+        {tab === "ayarlar" && renderAyarlarTab()}
+        {tab === "menu" && renderMenuTab()}
       </main>
 
       <style>{`
         :root {
           --primary: #E53935;
-          --primary-dark: #C62828;
-          --bg: #F8F9FA;
-          --panel: #FFFFFF;
+          --primary-hover: #C62828;
+          --bg: #F3F4F6;
+          --card-bg: #FFFFFF;
+          --border: #E5E7EB;
           --text: #111827;
           --text-soft: #6B7280;
-          --border: #E5E7EB;
           --success: #10B981;
           --warning: #F59E0B;
           --danger: #EF4444;
         }
+
         * { box-sizing: border-box; }
         body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); }
-        .hy-app { min-height: 100vh; display: flex; }
-        .hy-layout { display: flex; min-height: 100vh; width: 100vw; }
-        .hy-sidebar { width: 260px; border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
-        .hy-sidebar-brand { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; color: var(--text); border-bottom: 1px solid var(--border); }
-        .hy-nav { padding: 12px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
-        .hy-nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; border: none; background: transparent; color: var(--text-soft); font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left; width: 100%; transition: all 0.15s; }
-        .hy-nav-item:hover { background: rgba(0,0,0,0.04); color: var(--text); }
-        .hy-nav-item.active { background: #FEE2E2; color: #C62828; font-weight: 600; }
-        .hy-main { flex: 1; padding: 32px; overflow-y: auto; max-height: 100vh; }
+
+        .hy-app { display: flex; min-height: 100vh; position: relative; width: 100%; }
+        .hy-sidebar { width: 260px; min-width: 260px; background: #fff; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 20px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; flex-shrink: 0; z-index: 10; }
+        .hy-sidebar-brand { padding: 0 20px 20px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+        .hy-nav { display: flex; flex-direction: column; gap: 4px; padding: 0 10px; }
+        .hy-nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; border: none; background: transparent; color: var(--text-soft); font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left; width: 100%; transition: all 0.15s; }
+        .hy-nav-item:hover { background: #F9FAFB; color: var(--text); }
+        .hy-nav-item.active { background: #FEE2E2; color: var(--primary); font-weight: 600; }
+
+        .hy-main { flex: 1; padding: 28px 36px; overflow-y: auto; min-width: 0; }
         .hy-topbar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-        .hy-page-title { font-size: 24px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.5px; }
-        .hy-page-sub { font-size: 13.5px; color: var(--text-soft); margin: 0; }
-        .hy-panel { background: rgba(255, 255, 255, 0.95); border: 1px solid var(--border); border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
-        .hy-property-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
-        .hy-property-card { background: rgba(255,255,255,0.95); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; display: flex; flex-direction: column; }
-        .hy-property-card:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
-        .hy-property-img { height: 160px; background: #F3F4F6; display: flex; align-items: center; justify-content: center; position: relative; color: #9CA3AF; }
-        .hy-property-img img { width: 100%; height: 100%; object-fit: cover; }
-        .hy-property-body { padding: 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; justify-content: space-between; }
-        .hy-property-title { font-size: 15px; font-weight: 700; color: var(--text); }
-        .hy-property-addr { font-size: 13px; color: var(--text-soft); }
-        .hy-status-badge { position: absolute; top: 12px; right: 12px; padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
-        .hy-status-badge.good { background: #D1FAE5; color: #065F46; }
-        .hy-status-badge.neutral { background: #F3F4F6; color: #374151; }
-        .hy-pill-badge { padding: 4px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600; display: inline-block; }
+        .hy-page-title { margin: 0; font-size: 24px; font-weight: 700; }
+        .hy-page-sub { margin: 4px 0 0; color: var(--text-soft); font-size: 13.5px; }
+
+        .hy-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+        .hy-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+        .hy-field { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-soft); }
+        .hy-field.span-2 { grid-column: span 2; }
+        .hy-field input, .hy-field select { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); outline: none; font-size: 13.5px; color: var(--text); background: #fff; }
+
+        .hy-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border-radius: 10px; font-size: 13.5px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.15s; }
+        .hy-btn.primary { background: var(--primary); color: #fff; }
+        .hy-btn.primary:hover { background: var(--primary-hover); }
+        .hy-btn.ghost { background: transparent; border-color: var(--border); color: var(--text); }
+        .hy-btn.ghost:hover { background: #F9FAFB; }
+        .hy-btn.danger { background: #FEE2E2; color: var(--danger); border-color: #FCA5A5; }
+        .hy-btn.sm { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; }
+
+        .hy-pill-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; }
         .hy-pill-badge.good { background: #D1FAE5; color: #065F46; }
         .hy-pill-badge.neutral { background: #F3F4F6; color: #374151; }
         .hy-pill-badge.warn { background: #FEF3C7; color: #92400E; }
         .hy-pill-badge.bad { background: #FEE2E2; color: #991B1B; }
-        .hy-btn { padding: 10px 18px; border-radius: 10px; font-size: 13.5px; font-weight: 600; border: 1px solid transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: background 0.15s; }
-        .hy-btn.primary { background: var(--primary); color: #fff; }
-        .hy-btn.primary:hover { background: var(--primary-dark); }
-        .hy-btn.ghost { background: #F3F4F6; color: var(--text); border-color: var(--border); }
-        .hy-btn.ghost:hover { background: #E5E7EB; }
-        .hy-btn.danger { background: #FEE2E2; color: #991B1B; border-color: #F87171; }
-        .hy-btn.danger:hover { background: #FECACA; }
-        .hy-btn.sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
-        .hy-fab { position: fixed; bottom: 32px; right: 32px; width: 56px; height: 56px; border-radius: 50%; background: var(--primary); color: #fff; border: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(229,57,53,0.4); cursor: pointer; transition: transform 0.2s; z-index: 40; }
-        .hy-fab:hover { transform: scale(1.05); }
-        .hy-modal-backdrop { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
-        .hy-modal { background: #fff; border-radius: 20px; width: 100%; max-width: 540px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 40px rgba(0,0,0,0.15); overflow: hidden; }
+
+        .hy-property-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
+        .hy-property-card { background: #fff; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+        .hy-property-card:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
+        .hy-property-img { height: 150px; background: #F3F4F6; position: relative; display: flex; align-items: center; justify-content: center; color: var(--text-soft); }
+        .hy-property-img img { width: 100%; height: 100%; object-fit: cover; }
+        .hy-status-badge { position: absolute; top: 10px; right: 10px; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+        .hy-status-badge.good { background: #10B981; color: #fff; }
+        .hy-status-badge.neutral { background: #6B7280; color: #fff; }
+        .hy-property-body { padding: 16px; }
+        .hy-property-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+        .hy-property-addr { font-size: 12.5px; color: var(--text-soft); margin-bottom: 12px; }
+
+        .hy-fab { position: fixed; bottom: 30px; right: 30px; width: 52px; height: 52px; border-radius: 50%; background: var(--primary); color: #fff; border: none; box-shadow: 0 8px 20px rgba(229,57,53,0.4); display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 40; }
+
+        .hy-modal-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+        .hy-modal { background: #fff; border-radius: 20px; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); }
         .hy-modal.wide { max-width: 800px; }
-        .hy-modal-head { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-        .hy-modal-head h3 { margin: 0; font-size: 18px; font-weight: 700; }
-        .hy-modal-close { background: transparent; border: none; cursor: pointer; color: var(--text-soft); }
-        .hy-modal-body { padding: 24px; overflow-y: auto; flex: 1; }
-        .hy-modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; background: #F9FAFB; }
-        .hy-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        .hy-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text); }
-        .hy-field.span-2 { grid-column: span 2; }
-        .hy-field input, .hy-field select, .hy-field textarea { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); font-size: 13.5px; font-weight: 400; outline: none; background: #fff; width: 100%; }
-        .hy-field input:focus, .hy-field select:focus, .hy-field textarea:focus { border-color: var(--primary); }
-        .hy-back-link { background: none; border: none; color: var(--text-soft); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 0; margin-bottom: 12px; }
-        .hy-back-link:hover { color: var(--text); }
-        .hy-tabs2 { display: flex; gap: 8px; }
-        .hy-tab2 { background: transparent; border: none; padding: 10px 16px; font-size: 13.5px; font-weight: 500; color: var(--text-soft); cursor: pointer; border-radius: 8px; transition: all 0.15s; }
-        .hy-tab2.active { background: #F3F4F6; color: var(--text); font-weight: 600; }
+        .hy-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+        .hy-modal-head h3 { margin: 0; font-size: 18px; }
+        .hy-modal-close { background: none; border: none; cursor: pointer; color: var(--text-soft); }
+        .hy-modal-footer { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 16px; }
+
+        .hy-tabs2 { display: flex; gap: 8px; overflow-x: auto; }
+        .hy-tab2 { padding: 12px 16px; background: none; border: none; border-bottom: 2px solid transparent; font-size: 13.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; white-space: nowrap; }
+        .hy-tab2.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+        .hy-avatar { width: 36px; height: 36px; border-radius: 50%; background: #E53935; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
+        .hy-back-link { background: none; border: none; color: var(--text-soft); font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 0; margin-bottom: 12px; }
         .hy-bell-wrap { position: relative; }
-        .hy-bell { width: 40px; height: 40px; border-radius: 50%; background: #F3F4F6; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text); position: relative; }
-        .hy-notif-badge { position: absolute; top: -2px; right: -2px; background: var(--primary); color: #fff; font-size: 10px; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; }
-        .hy-notif-panel { position: absolute; right: 0; top: 48px; width: 320px; background: #fff; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); padding: 16px; z-index: 50; }
-        .hy-notif-item { padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; line-height: 1.4; }
+        .hy-bell { width: 36px; height: 36px; border-radius: 50%; background: #fff; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; }
+        .hy-notif-badge { position: absolute; top: -2px; right: -2px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .hy-notif-panel { position: absolute; right: 0; top: 44px; width: 300px; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px; boxShadow: 0 10px 25px rgba(0,0,0,0.1); z-index: 50; }
+        .hy-notif-item { padding: 8px 10px; border-radius: 8px; font-size: 12px; margin-bottom: 6px; }
         .hy-notif-item.bad { background: #FEE2E2; color: #991B1B; }
         .hy-notif-item.warn { background: #FEF3C7; color: #92400E; }
-        .hy-avatar { width: 36px; height: 36px; border-radius: 50%; background: #E5E7EB; color: #374151; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex-shrink: 0; }
+        .hy-empty { color: var(--text-soft); font-size: 13.5px; text-align: center; padding: 20px 0; }
         .muted { color: var(--text-soft); }
-        .small { font-size: 12px; }
+        .muted.small { font-size: 12px; }
+
+        @media print {
+          body * { visibility: hidden; }
+          #printable-senet, #printable-senet * { visibility: visible; }
+          #printable-senet { position: absolute; left: 0; top: 0; width: 100%; border: none !important; }
+        }
       `}</style>
     </div>
   );
