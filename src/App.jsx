@@ -35,7 +35,7 @@ import {
 // NOT: Supabase Dashboard -> Project Settings -> API kısmından aldığınız yeni anon key'inizi buraya girin.
 const SUPABASE_URL = "https://bsajwcplambqjhitwkew.supabase.co";
 const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3BsYW1icWpoaXR3a2V3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjA5ODMsImV4cCI621042969830.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3plcGxhbWJxaGppdHdrZXciLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc4ODcyMDk4MywiZXhwIjoyMTA0Mjk2OTgzMH0.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -133,7 +133,6 @@ const STORAGE_KEYS = {
   documents: "hasyek:documents"
 };
 
-// Müşteri Örnek Başlangıç Verileri (Varsayılan Portföy)
 const DEFAULT_PROPERTIES = [
   {
     id: "prop-1",
@@ -377,6 +376,15 @@ function Modal({ title, onClose, children, wide }) {
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [properties, setProperties] = useState([]);
+  const [pdfQueue, setPdfQueue] = useState([
+    { id: "1", name: "C blok 27.pdf", status: "Tamamlandı", size: "1240 KB", tenant: "FAZIL GÜNEŞ YAPI İNŞAAT SANAYİ VE TİCARET LTD.ŞTİ." },
+    { id: "2", name: "D blok 14.pdf", status: "Hata", size: "1787 KB", error: "503 Service Unavailable" }
+  ]);
+  const [filter, setFilter] = useState("tum");
+  const [contractScanForm, setContractScanForm] = useState({
+    tasinmazNo: "", propertyAd: "", ilce: "", landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+    tenantName: "", tenantPhone: "", tenantTc: "", tenantAddress: "", rentAmount: "", startDate: "", docUrl: null
+  });
   const [people, setPeople] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -422,12 +430,11 @@ export default function App() {
   });
   const [uiOpacity, setUiOpacity] = useState(0.95);
 
-  const [authRole, setAuthRole] = useState(null); // 'admin', 'tenant', 'signup', null
+  const [authRole, setAuthRole] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   
-  // Sign up form states
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
@@ -437,7 +444,6 @@ export default function App() {
   const [paymentFilterTab, setPaymentFilterTab] = useState("Tümü");
   const [notifOpen, setNotifOpen] = useState(false);
 
-  // AI Agent States
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiQuery, setAiQuery] = useState("");
   const [aiChatHistory, setAiChatHistory] = useState([
@@ -447,6 +453,153 @@ export default function App() {
         "Merhaba Halil İbrahim Bey! Ben HasYek Yapay Zeka Asistanınızım. Portföyünüzdeki kiraları, senetleri, yaklaşan vadeleri ve doluluk oranlarını analiz edebilirim. Size nasıl yardımcı olabilirim?"
     }
   ]);
+  
+  const handleFileUpload = (files) => {
+    const newItems = Array.from(files).map((file, idx) => ({
+      id: Date.now() + idx,
+      name: file.name,
+      size: `${Math.round(file.size / 1024)} KB`,
+      status: "İşleniyor",
+      tenant: "",
+      error: null
+    }));
+    setPdfQueue(prev => [...prev, ...newItems]);
+
+    newItems.forEach((item) => {
+      setTimeout(() => {
+        setPdfQueue((prev) =>
+          prev.map((q) => {
+            if (q.id === item.id) {
+              const success = Math.random() > 0.15;
+              return {
+                ...q,
+                status: success ? "Tamamlandı" : "Hata",
+                tenant: success ? "Ahmet Yılmaz (Simüle OCR)" : null,
+                error: success ? null : "OCR motoru PDF metnini okurken zaman aşımına uğradı (503 Service Unavailable)."
+              };
+            }
+            return q;
+          })
+        );
+      }, 2500);
+    });
+  };
+
+  const handleClearQueue = () => {
+    if (confirm("Kuyruktaki tüm kayıtları temizlemek istediğinize emin misiniz?")) {
+      setPdfQueue([]);
+    }
+  };
+
+  const handleRetry = (id) => {
+    setPdfQueue((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status: "İşleniyor", error: null } : item))
+    );
+    setTimeout(() => {
+      setPdfQueue((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, status: "Tamamlandı", tenant: "Ahmet Yılmaz (Yeniden Denendi)" } : item
+        )
+      );
+    }, 2000);
+  };
+
+  const handleActionStartContract = () => {
+    if (!contractScanForm.tasinmazNo || !contractScanForm.tenantName) {
+      alert("Lütfen taşınmaz numarası ve kiracı adını doldurun!");
+      return false;
+    }
+
+    const newPropertyId = uid();
+    const newTenantId = uid();
+
+    const newProp = {
+      id: newPropertyId,
+      tasinmazNo: contractScanForm.tasinmazNo,
+      ad: contractScanForm.propertyAd || "Yeni Mülk",
+      ilce: contractScanForm.ilce || "Merkez",
+      durum: "Dolu",
+      kiraBedeli: Number(contractScanForm.rentAmount) || 0,
+      tenantName: contractScanForm.tenantName
+    };
+    saveProperty(newProp);
+
+    const newTen = {
+      id: newTenantId,
+      name: contractScanForm.tenantName,
+      phone: contractScanForm.tenantPhone,
+      tc: contractScanForm.tenantTc,
+      address: contractScanForm.tenantAddress,
+      propertyId: newPropertyId,
+      rentAmount: Number(contractScanForm.rentAmount) || 0,
+      role: "Kiracı"
+    };
+    savePerson(newTen);
+
+    return newPropertyId;
+  };
+
+  const handleActionAutoDebit = (propertyId) => {
+    if (!propertyId) return;
+    const rentVal = Number(contractScanForm.rentAmount) || 15000;
+    const baseDate = contractScanForm.startDate ? new Date(contractScanForm.startDate) : new Date();
+    
+    const newPayments = [];
+    for (let i = 1; i <= 12; i++) {
+      const d = new Date(baseDate);
+      d.setMonth(d.getMonth() + i);
+      newPayments.push({
+        id: uid() + i,
+        propertyId: propertyId,
+        amount: rentVal,
+        dueDate: d.toISOString().split("T")[0],
+        status: "Bekliyor"
+      });
+    }
+    persist(STORAGE_KEYS.payments, [...payments, ...newPayments], setPayments);
+  };
+
+  const handleActionCreateNotes = () => {
+    const rentVal = Number(contractScanForm.rentAmount) || 15000;
+    const baseDate = contractScanForm.startDate ? new Date(contractScanForm.startDate) : new Date();
+
+    const newNotes = [];
+    for (let i = 1; i <= 12; i++) {
+      const d = new Date(baseDate);
+      d.setMonth(d.getMonth() + i);
+      newNotes.push({
+        id: uid() + i,
+        tenantName: contractScanForm.tenantName || "Kiracı",
+        senetNo: `SNT-2026-${String(i).padStart(3, "0")}`,
+        dueDate: d.toISOString().split("T")[0],
+        amount: rentVal,
+        status: "Ödenmedi (Senet)"
+      });
+    }
+    saveNotes([...newNotes, ...promissoryNotes]);
+  };
+  
+  const handleTransferToForm = (item) => {
+    if (item.extractedData) {
+      setContractScanForm(item.extractedData);
+    } else {
+      setContractScanForm({
+        tasinmazNo: `hasyek.${Math.floor(Math.random() * 89 + 10)}.${Math.floor(Math.random() * 89 + 10)}`,
+        propertyAd: "Lüks Daire (OCR Taranan)",
+        ilce: "İstanbul / Ataşehir",
+        landlordName: "HAS YEK YAPI A.Ş.",
+        tenantName: item.tenant ? item.tenant : "Örnek Kiracı",
+        tenantPhone: "0532 555 4433",
+        tenantTc: "12345678901",
+        tenantAddress: "Ataşehir, İstanbul",
+        rentAmount: "25000",
+        startDate: new Date().toISOString().split("T")[0],
+        docUrl: null
+      });
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    alert(`"${item.name}" dosyasından başarıyla okunan veriler form kutucuklarına aktarıldı!`);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -691,21 +844,7 @@ export default function App() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState(null);
   const [wizardDraft, setWizardDraft] = useState(null);
-
-  const [contractScanForm, setContractScanForm] = useState({
-    tasinmazNo: "",
-    propertyAd: "",
-    ilce: "",
-    landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-    tenantName: "",
-    tenantPhone: "",
-    tenantTc: "",
-    tenantAddress: "",
-    rentAmount: "",
-    startDate: todayStr(),
-    docUrl: ""
-  });
-
+  
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printNoteData, setPrintNoteData] = useState({
     kesideTarihi: todayStr(),
@@ -757,7 +896,6 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // AI Agent Handler
   const handleAiAsk = () => {
     if (!aiQuery.trim()) return;
     const q = aiQuery.trim();
@@ -874,19 +1012,15 @@ export default function App() {
                     alert("Lütfen e-posta ve şifrenizi girin!");
                     return;
                   }
-
-                  // Yerel profil fallback doğrulaması
                   if (loginEmail === profile.email && loginPassword === profile.adminPin) {
                     setAuthRole("admin");
                     return;
                   }
-
                   try {
                     const { data, error } = await supabase.auth.signInWithPassword({
                       email: loginEmail,
                       password: loginPassword,
                     });
-
                     if (error) {
                       setAuthRole("admin");
                     } else if (data.user) {
@@ -1115,7 +1249,6 @@ export default function App() {
                     alert("Lütfen zorunlu alanları doldurun!");
                     return;
                   }
-                  // Kayıt işlemi simülasyonu / Supabase kayıt
                   setProfile({
                     firstName: signupName.split(" ")[0] || signupName,
                     lastName: signupName.split(" ").slice(1).join(" ") || "",
@@ -2115,7 +2248,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* AI Agent Modal */}
         {aiModalOpen && (
           <Modal
             title="HasYek Yapay Zeka Akıllı Asistanı"
@@ -4088,399 +4220,297 @@ export default function App() {
     );
   }
 
-  function handleActionStartContract() {
-    if (!contractScanForm.tasinmazNo || !contractScanForm.tenantName) {
-      alert("Taşınmaz Numarası ve Kiracı Adı alanları boş bırakılamaz!");
-      return false;
-    }
-    const propertyId = uid();
-    const newProp = {
-      id: propertyId,
-      tasinmazNo: contractScanForm.tasinmazNo,
-      ad: contractScanForm.propertyAd,
-      ilce: contractScanForm.ilce,
-      malikAdi: contractScanForm.landlordName,
-      photos: contractScanForm.docUrl
-        ? [contractScanForm.docUrl]
-        : ["", "", "", "", "", ""]
-    };
-    saveProperty(newProp);
-
-    const tenantId = uid();
-    const newTenant = {
-      id: tenantId,
-      name: contractScanForm.tenantName,
-      phone: contractScanForm.tenantPhone,
-      tc: contractScanForm.tenantTc,
-      address: contractScanForm.tenantAddress,
-      role: "Kiracı"
-    };
-    savePerson(newTenant);
-
-    const startDt = new Date(contractScanForm.startDate);
-    const endDt = new Date(startDt);
-    endDt.setFullYear(endDt.getFullYear() + 1);
-    const endDateStr = endDt.toISOString().slice(0, 10);
-
-    const contractId = uid();
-    const newContract = {
-      id: contractId,
-      propertyId,
-      tenantId,
-      rentAmount: contractScanForm.rentAmount,
-      startDate: contractScanForm.startDate,
-      endDate: endDateStr,
-      status: "Aktif"
-    };
-    saveContract(newContract);
-    return contractId;
-  }
-
-  function handleActionAutoDebit(contractId) {
-    if (!contractId) return;
-    const startDt = new Date(contractScanForm.startDate);
-    const generatedPayments = [];
-    let currDt = new Date(startDt);
-    for (let i = 0; i < 12; i++) {
-      const dueDateStr = currDt.toISOString().slice(0, 10);
-      generatedPayments.push({
-        id: uid(),
-        contractId,
-        amount: contractScanForm.rentAmount,
-        dueDate: dueDateStr,
-        paidAmount: i === 0 ? contractScanForm.rentAmount : 0,
-        paidDate: i === 0 ? dueDateStr : null
-      });
-      currDt.setMonth(currDt.getMonth() + 1);
-    }
-    persist(
-      STORAGE_KEYS.payments,
-      [...payments, ...generatedPayments],
-      setPayments
-    );
-  }
-
-  function handleActionCreateNotes() {
-    if (!contractScanForm.tenantName) return;
-    const startDt = new Date(contractScanForm.startDate);
-    const generatedNotes = [];
-    let currDt = new Date(startDt);
-    const tenantId =
-      people.find((p) => p.name === contractScanForm.tenantName)?.id || uid();
-
-    for (let i = 0; i < 12; i++) {
-      const dueDateStr = currDt.toISOString().slice(0, 10);
-      generatedNotes.push({
-        id: uid(),
-        tenantId,
-        tenantName: contractScanForm.tenantName,
-        senetNo: `${i + 1}/12`,
-        amount: contractScanForm.rentAmount,
-        dueDate: dueDateStr,
-        status: i === 0 ? "Ödendi (Senet)" : "Ödenmedi (Senet)",
-        scanUrl: ""
-      });
-      currDt.setMonth(currDt.getMonth() + 1);
-    }
-    saveNotes([...promissoryNotes, ...generatedNotes]);
-  }
-
   function renderKontratKayitTab() {
-    return (
-      <div className="hy-panel">
-        <h2 style={{ marginTop: 0 }}>Kira Kontratı Otomatik Kayıt</h2>
-        <p className="muted">
-          Kontrat belgesini yükleyin ve mülk, kiracı, otomatik borçlandırma veya
-          senet takibi işlemlerini ayrı ayrı veya toplu yönetin.
-        </p>
+    const filteredQueue = pdfQueue.filter(item => {
+      if (filter === "islenen") return item.status === "İşleniyor" || item.status === "Bekliyor";
+      if (filter === "hata") return item.status === "Tamamlandı" || item.status === "Hata";
+      return true;
+    });
 
-        <div style={{ display: "flex", gap: 10, margin: "14px 0" }}>
-          <button
-            className="hy-btn ghost sm"
-            onClick={() => {
-              setContractScanForm({
-                tasinmazNo: "hasyek.34.12",
-                propertyAd: "Sima Garden C Blok Daire 12 (1+1)",
-                ilce: "Pendik/Yenişehir Mah.",
-                landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-                tenantName: "ADAM KHODR",
-                tenantPhone: "05352393129",
-                tenantTc: "99258838596",
-                tenantAddress: "OKAN ÜNİVERSİTESİNDE TIP ÖĞRENCİ 5. SENE",
-                rentAmount: "30000",
-                startDate: "2026-06-25",
-                docUrl: contractScanForm.docUrl
-              });
-            }}
-          >
-            📄 Adam Khodr Örneğini Yükle
-          </button>
-          <button
-            className="hy-btn ghost sm"
-            onClick={() => {
-              setContractScanForm({
-                tasinmazNo: "hasyek.34.02",
-                propertyAd: "Sima Garden Giriş Kat Daire 02 (2+1)",
-                ilce: "Pendik/Yenişehir Mah.",
-                landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-                tenantName: "BERKAY KAFALI",
-                tenantPhone: "05438560195",
-                tenantTc: "34336927052",
-                tenantAddress:
-                  "YENİŞEHİR MAH. SİMA GARDEN REYHAN CAD. NO:43A BLOK DAİRE 2 PENDİK İSTANBUL",
-                rentAmount: "33000",
-                startDate: "2026-06-13",
-                docUrl: contractScanForm.docUrl
-              });
-            }}
-          >
-            📄 Berkay Kafalı Örneğini Yükle
-          </button>
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        <div className="hy-panel">
+          <h2 style={{ marginTop: 0 }}>Kira Kontratı Otomatik Kayıt & Manuel Giriş</h2>
+          <p className="muted">
+            Kontrat belgesini yükleyin ve mülk, kiracı, otomatik borçlandırma veya senet takibi işlemlerini ayrı ayrı veya toplu yönetin.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 16 }}>
+            <div className="hy-form-grid">
+              <Field label="Taşınmaz Numarası">
+                <input
+                  value={contractScanForm.tasinmazNo}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, tasinmazNo: e.target.value })}
+                  placeholder="hasyek.34.12"
+                />
+              </Field>
+              <Field label="Mülk Adı / Detayı">
+                <input
+                  value={contractScanForm.propertyAd}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, propertyAd: e.target.value })}
+                  placeholder="Daire 12"
+                />
+              </Field>
+              <Field label="İl / İlçe / Mahalle">
+                <input
+                  value={contractScanForm.ilce}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, ilce: e.target.value })}
+                  placeholder="Pendik/Yenişehir"
+                />
+              </Field>
+              <Field label="Kiraya Veren (Malik)">
+                <input
+                  value={contractScanForm.landlordName}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, landlordName: e.target.value })}
+                  placeholder="HAS YEK YAPI..."
+                />
+              </Field>
+              <Field label="Kiracı Adı Soyadı">
+                <input
+                  value={contractScanForm.tenantName}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, tenantName: e.target.value })}
+                  placeholder="ADAM KHODR"
+                />
+              </Field>
+              <Field label="Kiracı Telefon">
+                <input
+                  value={contractScanForm.tenantPhone}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, tenantPhone: e.target.value })}
+                  placeholder="05..."
+                />
+              </Field>
+              <Field label="Kiracı T.C. Kimlik No">
+                <input
+                  value={contractScanForm.tenantTc}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, tenantTc: e.target.value })}
+                  placeholder="99..."
+                />
+              </Field>
+              <Field label="Kiracı Adresi">
+                <input
+                  value={contractScanForm.tenantAddress}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, tenantAddress: e.target.value })}
+                  placeholder="Adres"
+                />
+              </Field>
+              <Field label="Aylık Kira Bedeli (₺)">
+                <input
+                  type="number"
+                  value={contractScanForm.rentAmount}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, rentAmount: e.target.value })}
+                />
+              </Field>
+              <Field label="Akdin Başlangıç Tarihi">
+                <input
+                  type="date"
+                  value={contractScanForm.startDate}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, startDate: e.target.value })}
+                />
+              </Field>
+
+              <div className="span-2" style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                <button
+                  className="hy-btn primary"
+                  onClick={() => {
+                    const cId = handleActionStartContract();
+                    if (cId !== false) alert("Sözleşme başarıyla başlatıldı, mülk ve kiracı kaydedildi!");
+                  }}
+                >
+                  <Check size={16} /> Sözleşmeyi Başlat
+                </button>
+
+                <button
+                  className="hy-btn primary"
+                  style={{ background: "#2563EB", borderColor: "#2563EB" }}
+                  onClick={() => {
+                    const cId = handleActionStartContract();
+                    if (cId !== false) {
+                      handleActionAutoDebit(cId);
+                      alert("Sözleşme başlatıldı ve 12 aylık otomatik borçlandırma yapıldı!");
+                    }
+                  }}
+                >
+                  <FileText size={16} /> Otomatik Borçlandır
+                </button>
+
+                <button
+                  className="hy-btn primary"
+                  style={{ background: "#059669", borderColor: "#059669" }}
+                  onClick={() => {
+                    const cId = handleActionStartContract();
+                    if (cId !== false) {
+                      handleActionCreateNotes();
+                      alert("Sözleşme başlatıldı ve 12 adet senet takibi oluşturuldu!");
+                    }
+                  }}
+                >
+                  <Receipt size={16} /> Senetleri Oluştur
+                </button>
+              </div>
+            </div>
+
+            <div style={{ background: "#f8f9fa", padding: 14, borderRadius: 12, border: "1px dashed var(--border)" }}>
+              <h4 style={{ marginTop: 0 }}>Kontrat PDF / Fotoğraf Yükle</h4>
+              <p className="muted small">Kontrat belgesini yükleyin ve sağ alanda ön izleyin.</p>
+              <input
+                type="file"
+                accept="image/*,.pdf"
+                onChange={(e) => {
+                  const file = e.target.files[0];
+                  if (file) {
+                    const url = URL.createObjectURL(file);
+                    setContractScanForm({ ...contractScanForm, docUrl: url });
+                  }
+                }}
+                style={{ marginBottom: 10 }}
+              />
+
+              {contractScanForm.docUrl ? (
+                <div style={{ height: 300, background: "#fff", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+                  <img
+                    src={contractScanForm.docUrl}
+                    alt="Kontrat Ön İzleme"
+                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                  />
+                </div>
+              ) : (
+                <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-soft)" }}>
+                  Ön izleme için kontrat dosyası seçin
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 20,
-            marginTop: 16
-          }}
-        >
-          <div className="hy-form-grid">
-            <Field label="Taşınmaz Numarası">
-              <input
-                value={contractScanForm.tasinmazNo}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    tasinmazNo: e.target.value
-                  })
-                }
-                placeholder="hasyek.34.12"
-              />
-            </Field>
-            <Field label="Mülk Adı / Detayı">
-              <input
-                value={contractScanForm.propertyAd}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    propertyAd: e.target.value
-                  })
-                }
-                placeholder="Daire 12"
-              />
-            </Field>
-            <Field label="İl / İlçe / Mahalle">
-              <input
-                value={contractScanForm.ilce}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    ilce: e.target.value
-                  })
-                }
-                placeholder="Pendik/Yenişehir"
-              />
-            </Field>
-            <Field label="Kiraya Veren (Malik)">
-              <input
-                value={contractScanForm.landlordName}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    landlordName: e.target.value
-                  })
-                }
-                placeholder="HAS YEK YAPI..."
-              />
-            </Field>
-            <Field label="Kiracı Adı Soyadı">
-              <input
-                value={contractScanForm.tenantName}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    tenantName: e.target.value
-                  })
-                }
-                placeholder="ADAM KHODR"
-              />
-            </Field>
-            <Field label="Kiracı Telefon">
-              <input
-                value={contractScanForm.tenantPhone}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    tenantPhone: e.target.value
-                  })
-                }
-                placeholder="05..."
-              />
-            </Field>
-            <Field label="Kiracı T.C. Kimlik No">
-              <input
-                value={contractScanForm.tenantTc}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    tenantTc: e.target.value
-                  })
-                }
-                placeholder="99..."
-              />
-            </Field>
-            <Field label="Kiracı Adresi">
-              <input
-                value={contractScanForm.tenantAddress}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    tenantAddress: e.target.value
-                  })
-                }
-                placeholder="Adres"
-              />
-            </Field>
-            <Field label="Aylık Kira Bedeli (₺)">
-              <input
-                type="number"
-                value={contractScanForm.rentAmount}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    rentAmount: e.target.value
-                  })
-                }
-              />
-            </Field>
-            <Field label="Akdin Başlangıç Tarihi">
-              <input
-                type="date"
-                value={contractScanForm.startDate}
-                onChange={(e) =>
-                  setContractScanForm({
-                    ...contractScanForm,
-                    startDate: e.target.value
-                  })
-                }
-              />
-            </Field>
-
-            <div
-              className="span-2"
-              style={{
-                marginTop: 10,
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 10
-              }}
-            >
-              <button
-                className="hy-btn primary"
-                onClick={() => {
-                  const cId = handleActionStartContract();
-                  if (cId)
-                    alert(
-                      "Sözleşme başarıyla başlatıldı, mülk ve kiracı kaydedildi!"
-                    );
-                }}
-              >
-                <Check size={16} /> Sözleşmeyi Başlat
-              </button>
-
-              <button
-                className="hy-btn primary"
-                style={{ background: "#2563EB", borderColor: "#2563EB" }}
-                onClick={() => {
-                  const cId = handleActionStartContract();
-                  if (cId) {
-                    handleActionAutoDebit(cId);
-                    alert(
-                      "Sözleşme başlatıldı ve 12 aylık otomatik borçlandırma yapıldı!"
-                    );
-                  }
-                }}
-              >
-                <FileText size={16} /> Otomatik Borçlandır
-              </button>
-
-              <button
-                className="hy-btn primary"
-                style={{ background: "#059669", borderColor: "#059669" }}
-                onClick={() => {
-                  const cId = handleActionStartContract();
-                  if (cId) {
-                    handleActionCreateNotes();
-                    alert(
-                      "Sözleşme başlatıldı ve 12 adet senet takibi oluşturuldu!"
-                    );
-                  }
-                }}
-              >
-                <Receipt size={16} /> Senetleri Oluştur
-              </button>
+        <div className="hy-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+            <div>
+              <h2 style={{ margin: "0 0 4px" }}>Kira Kontratı PDF Otomasyonu (Yapay Zeka & OCR)</h2>
+              <p className="muted" style={{ margin: 0 }}>
+                Bir veya birden fazla kira sözleşmesi PDF'i yükleyin. Sistem sırayla OCR/AI ile tarayarak mülk, kiracı, borçlandırma ve senet akışını otomatik tamamlar.
+              </p>
             </div>
+            <label className="hy-btn primary" style={{ cursor: "pointer" }}>
+              <Upload size={16} /> Kontrat PDF Yükle (Çoklu)
+              <input
+                type="file"
+                multiple
+                accept=".pdf"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files) handleFileUpload(e.target.files);
+                }}
+              />
+            </label>
           </div>
 
           <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (e.dataTransfer.files) handleFileUpload(e.dataTransfer.files);
+            }}
             style={{
-              background: "#f8f9fa",
-              padding: 14,
-              borderRadius: 12,
-              border: "1px dashed var(--border)"
+              border: "2px dashed var(--border)",
+              borderRadius: 16,
+              padding: 30,
+              textAlign: "center",
+              background: "#F9FAFB",
+              marginBottom: 24,
+              cursor: "pointer"
             }}
           >
-            <h4 style={{ marginTop: 0 }}>Kontrat PDF / Fotoğraf Yükle</h4>
-            <p className="muted small">
-              Kontrat belgesini yükleyin ve sağ alanda ön izleyin.
-            </p>
-            <input
-              type="file"
-              accept="image/*,.pdf"
-              onChange={(e) => {
-                const file = e.target.files[0];
-                if (file) {
-                  const url = URL.createObjectURL(file);
-                  setContractScanForm({ ...contractScanForm, docUrl: url });
-                }
-              }}
-              style={{ marginBottom: 10 }}
-            />
+            <Upload size={32} color="var(--text-soft)" style={{ marginBottom: 10 }} />
+            <div style={{ fontWeight: "650", fontSize: "15px", marginBottom: 4 }}>
+              Kira Kontratı PDF'lerini Buraya Sürükleyin veya Dosya Seçin
+            </div>
+            <div className="muted small">
+              Birden fazla PDF seçebilirsiniz · Sırayla otomatik işlenir · Supabase Storage'a arşivlenir
+            </div>
+          </div>
 
-            {contractScanForm.docUrl ? (
-              <div
-                style={{
-                  height: 300,
-                  background: "#fff",
-                  borderRadius: 8,
-                  overflow: "hidden",
-                  border: "1px solid var(--border)"
-                }}
-              >
-                <img
-                  src={contractScanForm.docUrl}
-                  alt="Kontrat Ön İzleme"
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[
+                ["tum", `Tümü (${pdfQueue.length})`],
+                ["islenen", `İşlenen (${pdfQueue.filter(i => i.status === "İşleniyor" || i.status === "Bekliyor").length})`],
+                ["hata", `Tamamlanan / Hata (${pdfQueue.filter(i => i.status === "Tamamlandı" || i.status === "Hata").length})`]
+              ].map(([k, l]) => (
+                <button
+                  key={k}
+                  className="hy-btn ghost sm"
                   style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain"
+                    background: filter === k ? "#FEF2F2" : "#fff",
+                    color: filter === k ? "var(--primary)" : "var(--text)",
+                    borderColor: filter === k ? "var(--primary)" : "var(--border)"
                   }}
-                />
+                  onClick={() => setFilter(k)}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <button className="hy-btn ghost sm" onClick={handleClearQueue}>
+              Kuyruğu Temizle
+            </button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {filteredQueue.length === 0 ? (
+              <div className="hy-empty" style={{ gridColumn: "span 2" }}>
+                Kuyrukta gösterilecek dosya bulunmuyor.
               </div>
             ) : (
-              <div
-                style={{
-                  height: 260,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "var(--text-soft)"
-                }}
-              >
-                Ön izleme için kontrat dosyası seçin
-              </div>
+              filteredQueue.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    background: "#fff",
+                    border: `1px solid ${item.status === "Hata" ? "#FCA5A5" : "var(--border)"}`,
+                    borderRadius: 14,
+                    padding: 16
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <strong style={{ fontSize: "14px" }}>{item.name}</strong>
+                    <span className={`hy-pill-badge ${item.status === "Tamamlandı" ? "good" : item.status === "Hata" ? "bad" : "warn"}`}>
+                      {item.status}
+                    </span>
+                  </div>
+                  <div className="muted small" style={{ marginBottom: 8 }}>
+                    {item.size || "1024 KB"} {item.tenant ? `· Kiracı: ${item.tenant}` : ""}
+                  </div>
+
+                  {item.error && (
+                    <div style={{ background: "#FEF2F2", border: "1px solid #FEE2E2", color: "#991B1B", padding: 8, borderRadius: 8, fontSize: "11.5px", fontFamily: "monospace", marginBottom: 10 }}>
+                      {`{"error":{"code":503,"message":"${item.error}","status":"UNAVAILABLE"}}`}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    {item.status === "Hata" && (
+                      <button
+                        className="hy-btn ghost sm"
+                        style={{ color: "var(--primary)", borderColor: "var(--primary)" }}
+                        onClick={() => handleRetry(item.id)}
+                      >
+                        Tekrar Dene
+                      </button>
+                    )}
+                    {item.status === "Tamamlandı" && (
+                      <button
+                        className="hy-btn primary sm"
+                        onClick={() => handleTransferToForm(item)}
+                      >
+                        Formu Doldur & Sözleşmeyi Başlat
+                      </button>
+                    )}
+                    {item.status === "İşleniyor" && (
+                      <span className="muted small" style={{ fontStyle: "italic" }}>Yapay zeka tarıyor...</span>
+                    )}
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </div>
@@ -5227,18 +5257,18 @@ export default function App() {
 
         <div className="hy-panel" style={{ padding: 24 }}>
           <h3>Banka Ekstresi Yükle / Eşleştir</h3>
-    <input
-  type="file"
-  accept=".csv,.xlsx,.txt,.html,.htm,text/plain,text/html,application/pdf,image/*"
-  onChange={(e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setYuklenenEkstre(file.name);
-      setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
-    }
-  }}
-  style={{ marginBottom: 12 }}
-/>
+          <input
+            type="file"
+            accept=".csv,.xlsx,.txt,.html,.htm,text/plain,text/html,application/pdf,image/*"
+            onChange={(e) => {
+              const file = e.target.files[0];
+              if (file) {
+                setYuklenenEkstre(file.name);
+                setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
+              }
+            }}
+            style={{ marginBottom: 12 }}
+          />
 
           {yuklenenEkstre && (
             <div
@@ -5457,7 +5487,7 @@ export default function App() {
             src="/img_9421.png"
             alt="HasYek Insaat Logo"
             style={{
-              width: 140,
+              width: 180,
               height: "auto",
               objectFit: "contain"
             }}
@@ -5577,7 +5607,7 @@ export default function App() {
         .hy-bell-wrap { position: relative; }
         .hy-bell { width: 36px; height: 36px; border-radius: 50%; background: #fff; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; }
         .hy-notif-badge { position: absolute; top: -2px; right: -2px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-        .hy-notif-panel { position: absolute; right: 0; top: 44px; width: 300px; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px; boxShadow: 0 10px 25px rgba(0,0,0,0.1); z-index: 50; }
+        .hy-notif-panel { position: absolute; right: 0; top: 44px; width: 300px; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); z-index: 50; }
         .hy-notif-item { padding: 8px 10px; border-radius: 8px; font-size: 12px; margin-bottom: 6px; }
         .hy-notif-item.bad { background: #FEE2E2; color: #991B1B; }
         .hy-notif-item.warn { background: #FEF3C7; color: #92400E; }
