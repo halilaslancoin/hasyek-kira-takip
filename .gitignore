@@ -1,6 +1,5 @@
 node_modules
-distelease
+dist
+release
 .DS_Store
-release/
-release/
-release/
+.freebuff/
