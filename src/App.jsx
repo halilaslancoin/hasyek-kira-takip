@@ -31,6 +31,9 @@ import {
   Send,
   UserPlus
 } from "lucide-react";
+import * as pdfjsLib from "pdfjs-dist";
+const workerUrl = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url);
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.href;
 
 // NOT: Supabase Dashboard -> Project Settings -> API kısmından aldığınız yeni anon key'inizi buraya girin.
 const SUPABASE_URL = "https://bsajwcplambqjhitwkew.supabase.co";
@@ -598,35 +601,86 @@ export default function App() {
     }
   ]);
   
-  const handleFileUpload = (files) => {
+  const extractSözleşmeVerileri = async (pdfFile) => {
+    const arrayBuffer = await pdfFile.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let metin = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const sayfa = await pdf.getPage(i);
+      const içerik = await sayfa.getTextContent();
+      metin += içerik.items.map((item) => item.str).join(" ") + "\n";
+    }
+    console.log("[PDF Metni]", metin.slice(0, 5000));
+    try { localStorage.setItem("pdf_extract_debug", metin.slice(0, 50000)); } catch(e) { console.error("Debug kaydedilemedi:", e); }
+    if (!metin || metin.trim().length < 100) {
+      throw new Error("PDF'de metin katmanı bulunamadı (taranmış/scan PDF olabilir). Gerçek OCR (Tesseract, Google Vision, Azure AI) gerekir.");
+    }
+    const sonuclar = {};
+    const kiraciMatch = metin.match(/Kiracının Ad[ıi] Soyad[ıi]\/? T\.C\. Kimlik No\.([^a-zA-Z0-9]|$)/);
+    if (kiraciMatch) {
+      sonuclar.kiraciAdi = kiraciMatch[1] ? kiraciMatch[1].trim().slice(0, 80) : "";
+    }
+    const kiraMatch = metin.match(/Bir Aylık Kira Karşılığı[^a-zA-Z0-9]*([\d\s\.]+)\s*(TL)?/);
+    if (kiraMatch) {
+      sonuclar.kiraBedeli = kiraMatch[1].replace(/\s/g, "").replace("TL", "");
+    }
+    const tarihMatch = metin.match(/Kiran[ınI]n Baslang[ıi]ç[ıi][^a-zA-Z0-9]*(.+)/);      if (tarihMatch) {
+      sonuclar.kiraBaslangic = tarihMatch[1] ? tarihMatch[1].trim().slice(0, 50) : "";
+    }
+    const ibanMatch = metin.match(/Kiran[ınI]n Ödenece[ğG]e Banka Ad[ıI] ve IBAN\s*numaras[ıi][^a-zA-Z0-9]*([\s\d\w]+)/);
+    if (ibanMatch) {
+      sonuclar.iban = ibanMatch[1] ? ibanMatch[1].replace(/\s/g, "").slice(0, 50) : "";
+    }
+    const depozitoMatch = metin.match(/Kirac[ıI] depozito olarak\s*(\d+)\s*aylık kira bedelini/s);
+    if (depozitoMatch) {
+      sonuclar.depozitoAylik = depozitoMatch[1];
+    }
+    return Object.keys(sonuclar).length > 0 ? sonuclar : null;
+  };
+
+  const handleFileUpload = async (files) => {
     const newItems = Array.from(files).map((file, idx) => ({
       id: Date.now() + idx,
       name: file.name,
       size: `${Math.round(file.size / 1024)} KB`,
       status: "İşleniyor",
       tenant: "",
-      error: null
+      error: null,
+      extractedData: null,
+      file: file
     }));
-    setPdfQueue(prev => [...prev, ...newItems]);
-
-    newItems.forEach((item) => {
-      setTimeout(() => {
+    setPdfQueue((prev) => [...prev, ...newItems]);
+    for (const item of newItems) {
+      try {
+        const veriler = await extractSözleşmeVerileri(item.file);
         setPdfQueue((prev) =>
-          prev.map((q) => {
-            if (q.id === item.id) {
-              const success = Math.random() > 0.15;
-              return {
-                ...q,
-                status: success ? "Tamamlandı" : "Hata",
-                tenant: success ? "Ahmet Yılmaz (Simüle OCR)" : null,
-                error: success ? null : "OCR motoru PDF metnini okurken zaman aşımına uğradı (503 Service Unavailable)."
-              };
-            }
-            return q;
-          })
+          prev.map((q) =>
+            q.id === item.id
+              ? {
+                  ...q,
+                  status: veriler ? "Tamamlandı" : "Hata",
+                  tenant: veriler?.kiraciAdi || "(Kiracı adı bulunamadı)",
+                  error: veriler ? null : "PDF'den gerekli alanlar başarıyla okunamadı.",
+                  extractedData: veriler
+                }
+              : q
+          )
         );
-      }, 2500);
-    });
+      } catch (hata) {
+        setPdfQueue((prev) =>
+          prev.map((q) =>
+            q.id === item.id
+              ? {
+                  ...q,
+                  status: "Hata",
+                  tenant: "",
+                  error: hata && hata.message ? hata.message : "PDF işlenirken hata oluştu."
+                }
+              : q
+          )
+        );
+      }
+    }
   };
 
   const handleClearQueue = () => {
@@ -635,17 +689,43 @@ export default function App() {
     }
   };
 
-  const handleRetry = (id) => {
+  const handleRetry = async (id) => {
+    const item = pdfQueue.find((q) => q.id === id);
+    if (!item || !item.file) return;
     setPdfQueue((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, status: "İşleniyor", error: null } : item))
+      prev.map((q) =>
+        q.id === id ? { ...q, status: "İşleniyor", error: null, extractedData: null } : q
+      )
     );
-    setTimeout(() => {
+    try {
+      const veriler = await extractSözleşmeVerileri(item.file);
       setPdfQueue((prev) =>
-        prev.map((item) =>
-          item.id === id ? { ...item, status: "Tamamlandı", tenant: "Ahmet Yılmaz (Yeniden Denendi)" } : item
+        prev.map((q) =>
+          q.id === id
+            ? {
+                ...q,
+                status: veriler ? "Tamamlandı" : "Hata",
+                tenant: veriler?.kiraciAdi || "(Kiracı adı bulunamadı)",
+                error: veriler ? null : "PDF'den gerekli alanlar tekrar okunamadı.",
+                extractedData: veriler
+              }
+            : q
         )
       );
-    }, 2000);
+    } catch (hata) {
+      setPdfQueue((prev) =>
+        prev.map((q) =>
+          q.id === id
+            ? {
+                ...q,
+                status: "Hata",
+                tenant: "",
+                error: hata && hata.message ? hata.message : "PDF işlenirken hata oluştu."
+              }
+            : q
+        )
+      );
+    }
   };
 
   const handleActionStartContract = () => {
@@ -725,14 +805,26 @@ export default function App() {
   
   const handleTransferToForm = (item) => {
     if (item.extractedData) {
-      setContractScanForm(item.extractedData);
+      const d = item.extractedData;
+      setContractScanForm({
+        tasinmazNo: d.tahsilNo || "",
+        propertyAd: "Sözleşmeden Taranan Mülk",
+        ilce: "",
+        landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
+        tenantName: d.kiraciAdi || "",
+        tenantTc: "",
+        tenantAddress: "",
+        rentAmount: d.kiraBedeli || "",
+        startDate: d.kiraBaslangic || new Date().toISOString().split("T")[0],
+        docUrl: null
+      });
     } else {
       setContractScanForm({
         tasinmazNo: `hasyek.${Math.floor(Math.random() * 89 + 10)}.${Math.floor(Math.random() * 89 + 10)}`,
         propertyAd: "Lüks Daire (OCR Taranan)",
         ilce: "İstanbul / Ataşehir",
         landlordName: "HAS YEK YAPI A.Ş.",
-        tenantName: item.tenant ? item.tenant : "Örnek Kiracı",
+        tenantName: "Örnek Kiracı",
         tenantPhone: "0532 555 4433",
         tenantTc: "12345678901",
         tenantAddress: "Ataşehir, İstanbul",
