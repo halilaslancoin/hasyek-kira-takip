@@ -35,54 +35,134 @@ import {
 // NOT: Supabase Dashboard -> Project Settings -> API kısmından aldığınız yeni anon key'inizi buraya girin.
 const SUPABASE_URL = "https://bsajwcplambqjhitwkew.supabase.co";
 const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3plcGxhbWJxaGppdHdrZXciLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc4ODcyMDk4MywiZXhwIjoyMTA0Mjk2OTgzMH0.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzYWp3Y3BsYW1icWpoaXR3a2V3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjA5ODMsImV4cCI6MjEwNDI5Njk4M30.aoovr1RejbazLcSq7UPDWoK4zR-mGrVfmMiZSnubUaQ";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// --- Oturum kapsamı ---------------------------------------------------------
+// Veri her zaman giriş yapan kullanıcının kimliğine bağlıdır: bulutta
+// user_data tablosunda user_id, yerelde ise anahtara eklenen kullanıcı önekiyle
+// ayrılır. Oturum yokken kimsenin hesabına yazılmaz.
+let sessionUserId = null;
+const setSessionUser = (id) => {
+  sessionUserId = id || null;
+};
+
+const localKeyFor = (key) =>
+  `${sessionUserId ? "u:" + sessionUserId : "anon"}:${key}`;
+
+const hataMetni = (err) =>
+  (err && (err.message || err.error_description || err.details)) ||
+  String(err || "bilinmeyen hata");
+
+// Bulut durumu değişince arayüze haber ver ("bulut bağlı" / "yerel mod").
+let cloudListener = () => {};
+const onCloudStatus = (fn) => {
+  cloudListener = fn;
+};
+const reportCloud = (state, detail) => {
+  try {
+    cloudListener(state, detail || "");
+  } catch (e) {
+    /* dinleyici yoksa sessizce geç */
+  }
+};
+
+// Yerel (önekli) kopyayı bulutla senkron tutan ince katman.
 if (typeof window !== "undefined") {
   window.storage = {
     async get(key) {
+      const yerel = localStorage.getItem(localKeyFor(key));
+      if (!sessionUserId) return { key, value: yerel, cloud: false };
       try {
         const { data, error } = await supabase
-          .from("app_data")
+          .from("user_data")
           .select("value")
+          .eq("user_id", sessionUserId)
           .eq("key", key)
           .maybeSingle();
-        if (error || !data) {
-          return { key, value: localStorage.getItem(key), shared: false };
-        }
-        return { key, value: data.value, shared: false };
+        if (error) throw error;
+        reportCloud("ok");
+        if (!data) return { key, value: yerel, cloud: false };
+        return { key, value: data.value, cloud: true };
       } catch (e) {
-        return { key, value: localStorage.getItem(key), shared: false };
+        reportCloud("error", hataMetni(e));
+        return { key, value: yerel, cloud: false };
       }
     },
     async set(key, value) {
+      localStorage.setItem(localKeyFor(key), value);
+      if (!sessionUserId) return { key, value, cloud: false };
       try {
-        localStorage.setItem(key, value);
-        await supabase.from("app_data").upsert({ key, value });
+        const { error } = await supabase.from("user_data").upsert({
+          user_id: sessionUserId,
+          key,
+          value,
+          updated_at: new Date().toISOString()
+        });
+        if (error) throw error;
+        reportCloud("ok");
+        return { key, value, cloud: true };
       } catch (e) {
-        console.error("Kayıt hatası:", e);
+        reportCloud("error", hataMetni(e));
+        return { key, value, cloud: false };
       }
-      return { key, value, shared: false };
     },
     async delete(key) {
+      localStorage.removeItem(localKeyFor(key));
+      if (!sessionUserId) return { key, deleted: true, cloud: false };
       try {
-        localStorage.removeItem(key);
-        await supabase.from("app_data").delete().eq("key", key);
+        const { error } = await supabase
+          .from("user_data")
+          .delete()
+          .eq("user_id", sessionUserId)
+          .eq("key", key);
+        if (error) throw error;
+        reportCloud("ok");
+        return { key, deleted: true, cloud: true };
       } catch (e) {
-        console.error("Silme hatası:", e);
+        reportCloud("error", hataMetni(e));
+        return { key, deleted: true, cloud: false };
       }
-      return { key, deleted: true, shared: false };
     },
     async list(prefix) {
-      const { data } = await supabase.from("app_data").select("key");
-      const keys = (data || [])
-        .map((d) => d.key)
-        .filter((k) => !prefix || k.startsWith(prefix));
-      return { keys };
+      if (!sessionUserId) return { keys: [] };
+      try {
+        const { data, error } = await supabase
+          .from("user_data")
+          .select("key")
+          .eq("user_id", sessionUserId);
+        if (error) throw error;
+        reportCloud("ok");
+        return {
+          keys: (data || [])
+            .map((d) => d.key)
+            .filter((k) => !prefix || k.startsWith(prefix))
+        };
+      } catch (e) {
+        reportCloud("error", hataMetni(e));
+        return { keys: [] };
+      }
     }
   };
 }
+
+// Supabase'in İngilizce hata mesajlarını kullanıcıya Türkçe gösteriyoruz.
+const turkceAuthHatasi = (mesaj) => {
+  const m = (mesaj || "").toLowerCase();
+  if (m.includes("invalid login credentials")) return "E-posta veya şifre hatalı.";
+  if (m.includes("email not confirmed"))
+    return "E-postanızı doğrulamanız gerekiyor. Gelen kutunuzdaki bağlantıya tıklayın.";
+  if (m.includes("user already registered")) return "Bu e-posta ile zaten bir hesap var. Giriş yapmayı deneyin.";
+  if (m.includes("password should be at least")) return "Şifre en az 6 karakter olmalı.";
+  if (m.includes("unable to validate email") || m.includes("invalid email"))
+    return "Geçerli bir e-posta adresi girin.";
+  if (m.includes("rate limit") || m.includes("for security purposes"))
+    return "Çok fazla deneme yapıldı. Lütfen biraz sonra tekrar deneyin.";
+  if (m.includes("failed to fetch") || m.includes("network"))
+    return "Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edin.";
+  return mesaj || "Beklenmeyen bir hata oluştu.";
+};
 
 const uid = () =>
   window.crypto && window.crypto.randomUUID
@@ -98,6 +178,18 @@ const fmtDate = (d) => {
   const dt = new Date(d);
   if (isNaN(dt)) return "—";
   return dt.toLocaleDateString("tr-TR");
+};
+const fmtDateTime = (d) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (isNaN(dt)) return "—";
+  return dt.toLocaleString("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 };
 const daysUntil = (d) => {
   if (!d) return null;
@@ -130,186 +222,52 @@ const STORAGE_KEYS = {
   accountingIntegration: "hasyek:accountingIntegration",
   bankStatements: "hasyek:bankStatements",
   opacity: "hasyek:opacity",
-  documents: "hasyek:documents"
+  documents: "hasyek:documents",
+  notifications: "hasyek:bildirimAyarlari"
 };
 
-const DEFAULT_PROPERTIES = [
-  {
-    id: "prop-1",
-    tasinmazNo: "hasyek.34.12",
-    ad: "Sima Garden C Blok Daire 12",
-    il: "İstanbul",
-    ilce: "Pendik",
-    mahalle: "Yenişehir Mah.",
-    sokak: "Reyhan Cad.",
-    binaNo: "43",
-    kat: "3",
-    daireNo: "12",
-    brutM2: "85",
-    netM2: "70",
-    odaSayisi: "1+1",
-    malikAdi: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-    mülkTipi: "Konut",
-    konutTürü: "Daire",
-    photos: []
-  },
-  {
-    id: "prop-2",
-    tasinmazNo: "hasyek.34.02",
-    ad: "Sima Garden Giriş Kat Daire 02",
-    il: "İstanbul",
-    ilce: "Pendik",
-    mahalle: "Yenişehir Mah.",
-    sokak: "Reyhan Cad.",
-    binaNo: "43A",
-    kat: "Zemin",
-    daireNo: "2",
-    brutM2: "110",
-    netM2: "95",
-    odaSayisi: "2+1",
-    malikAdi: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-    mülkTipi: "Konut",
-    konutTürü: "Daire",
-    photos: []
-  }
-];
+// Sunucudaki gunluk-bildirim fonksiyonu bu anahtarın değerini okur.
+const DEFAULT_BILDIRIM_AYARLARI = {
+  aktif: true,
+  hatirlatmaGun: 3,
+  kanallar: { eposta: true, whatsapp: false },
+  kiracilaraGonder: true,
+  malikeGonder: true,
+  malikEposta: "",
+  malikTelefon: "",
+  gonderimSaati: "09:00",
+  sablonVade: "kira_vade_hatirlatma",
+  sablonGecikme: "kira_gecikme",
+  waDilKodu: "tr"
+};
 
-const DEFAULT_PEOPLE = [
-  {
-    id: "p-1",
-    name: "ADAM KHODR",
-    phone: "05352393129",
-    tc: "99258838596",
-    address: "OKAN ÜNİVERSİTESİ TIP ÖĞRENCİSİ",
-    role: "Kiracı"
-  },
-  {
-    id: "p-2",
-    name: "BERKAY KAFALI",
-    phone: "05438560195",
-    tc: "34336927052",
-    address: "YENİŞEHİR MAH. SİMA GARDEN NO:43A DAİRE 2 PENDİK",
-    role: "Kiracı"
-  }
-];
-
-const DEFAULT_CONTRACTS = [
-  {
-    id: "c-1",
-    propertyId: "prop-1",
-    tenantId: "p-1",
-    rentAmount: "30000",
-    startDate: "2026-06-25",
-    endDate: "2027-06-25",
-    status: "Aktif"
-  },
-  {
-    id: "c-2",
-    propertyId: "prop-2",
-    tenantId: "p-2",
-    rentAmount: "33000",
-    startDate: "2026-06-13",
-    endDate: "2027-06-13",
-    status: "Aktif"
-  }
-];
-
-const DEFAULT_PAYMENTS = [
-  {
-    id: "pay-1",
-    contractId: "c-1",
-    amount: "30000",
-    dueDate: "2026-06-25",
-    paidAmount: "30000",
-    paidDate: "2026-06-25"
-  },
-  {
-    id: "pay-2",
-    contractId: "c-1",
-    amount: "30000",
-    dueDate: "2026-07-25",
-    paidAmount: "30000",
-    paidDate: "2026-07-25"
-  },
-  {
-    id: "pay-3",
-    contractId: "c-1",
-    amount: "30000",
-    dueDate: "2026-08-25",
-    paidAmount: "30000",
-    paidDate: "2026-08-25"
-  },
-  {
-    id: "pay-4",
-    contractId: "c-1",
-    amount: "30000",
-    dueDate: "2026-09-25",
-    paidAmount: "0",
-    paidDate: null
-  },
-  {
-    id: "pay-5",
-    contractId: "c-2",
-    amount: "33000",
-    dueDate: "2026-06-13",
-    paidAmount: "33000",
-    paidDate: "2026-06-13"
-  },
-  {
-    id: "pay-6",
-    contractId: "c-2",
-    amount: "33000",
-    dueDate: "2026-07-13",
-    paidAmount: "33000",
-    paidDate: "2026-07-13"
-  },
-  {
-    id: "pay-7",
-    contractId: "c-2",
-    amount: "33000",
-    dueDate: "2026-08-13",
-    paidAmount: "33000",
-    paidDate: "2026-08-13"
-  },
-  {
-    id: "pay-8",
-    contractId: "c-2",
-    amount: "33000",
-    dueDate: "2026-09-13",
-    paidAmount: "0",
-    paidDate: null
-  }
-];
-
-const DEFAULT_NOTES = [
-  {
-    id: "n-1",
-    tenantId: "p-1",
-    tenantName: "ADAM KHODR",
-    senetNo: "1/12",
-    amount: "30000",
-    dueDate: "2026-06-25",
-    status: "Ödendi (Senet)"
-  },
-  {
-    id: "n-2",
-    tenantId: "p-1",
-    tenantName: "ADAM KHODR",
-    senetNo: "2/12",
-    amount: "30000",
-    dueDate: "2026-07-25",
-    status: "Ödendi (Senet)"
-  },
-  {
-    id: "n-3",
-    tenantId: "p-2",
-    tenantName: "BERKAY KAFALI",
-    senetNo: "1/12",
-    amount: "33000",
-    dueDate: "2026-06-13",
-    status: "Ödendi (Senet)"
-  }
-];
+// Örnek/demo kayıtlar kaldırıldı: uygulama boş bir portföyle başlar.
+// Aşağıdaki kimlikler eski sürümlerin demo verisine ait; ilk yüklemede ayıklanır.
+const LEGACY_SEED_IDS = new Set([
+  "prop-1",
+  "prop-2",
+  "p-1",
+  "p-2",
+  "c-1",
+  "c-2",
+  "pay-1",
+  "pay-2",
+  "pay-3",
+  "pay-4",
+  "pay-5",
+  "pay-6",
+  "pay-7",
+  "pay-8",
+  "n-1",
+  "n-2",
+  "n-3",
+  "bs1",
+  "b1"
+]);
+const dropLegacySeed = (value) =>
+  Array.isArray(value)
+    ? value.filter((item) => !LEGACY_SEED_IDS.has(item && item.id))
+    : value;
 
 function paymentStatus(p) {
   if (p.paidAmount && Number(p.paidAmount) >= Number(p.amount)) return "Ödendi";
@@ -354,6 +312,190 @@ function StatusPill({ status }) {
   );
 }
 
+// Kiracı bazlı bildirim ayarlarını sadeleştirir; boş alanlar genel ayara düşer.
+const tenantBildirimAyarlari = (tenant) => {
+  const b = (tenant && tenant.bildirim) || {};
+  const temiz = {};
+  if (b.hatirlatmaGun !== "" && b.hatirlatmaGun !== null && b.hatirlatmaGun !== undefined) {
+    const n = Number(b.hatirlatmaGun);
+    if (Number.isFinite(n) && n >= 0) temiz.hatirlatmaGun = n;
+  }
+  if (typeof b.eposta === "boolean") temiz.eposta = b.eposta;
+  if (typeof b.whatsapp === "boolean") temiz.whatsapp = b.whatsapp;
+  if (typeof b.kiracilaraGonder === "boolean")
+    temiz.kiracilaraGonder = b.kiracilaraGonder;
+  if (typeof b.malikeGonder === "boolean") temiz.malikeGonder = b.malikeGonder;
+  if (
+    typeof b.gonderimSaati === "string" &&
+    /^[0-9]{1,2}:[0-9]{2}$/.test(b.gonderimSaati)
+  ) {
+    temiz.gonderimSaati = b.gonderimSaati;
+  }
+  return temiz;
+};
+
+// Kiracı özel ayarı + genel ayar birleşimi (tek doğruluk kaynağı).
+// Sunucudaki fonksiyon da aynı önceliği uygular: özel ayar varsa o, yoksa genel.
+const etkinBildirimAyarlariVeri = (ozel, genel) => {
+  const o = ozel || {};
+  const g = genel || {};
+  const genelKanallar = g.kanallar || {};
+  return {
+    gun: o.hatirlatmaGun !== undefined ? o.hatirlatmaGun : g.hatirlatmaGun,
+    saat: o.gonderimSaati || g.gonderimSaati || "09:00",
+    eposta: o.eposta === undefined ? genelKanallar.eposta !== false : o.eposta === true,
+    whatsapp:
+      o.whatsapp === undefined ? genelKanallar.whatsapp === true : o.whatsapp === true,
+    kiracilara:
+      o.kiracilaraGonder === undefined
+        ? g.kiracilaraGonder !== false
+        : o.kiracilaraGonder !== false,
+    malike:
+      o.malikeGonder === undefined
+        ? g.malikeGonder !== false
+        : o.malikeGonder !== false,
+    kaynak: {
+      gun: o.hatirlatmaGun !== undefined ? "özel" : "genel",
+      saat: o.gonderimSaati ? "özel" : "genel",
+      eposta: o.eposta !== undefined ? "özel" : "genel",
+      whatsapp: o.whatsapp !== undefined ? "özel" : "genel"
+    }
+  };
+};
+
+const etkinBildirimAyarlari = (tenant, genel) =>
+  etkinBildirimAyarlariVeri(tenantBildirimAyarlari(tenant), genel);
+
+// Tek satırlık okunur özet (kaydedilmemiş taslakla birlikte).
+const bildirimOzeti = (tenant, draft, genel) => {
+  const b = { ...tenantBildirimAyarlari(tenant), ...(draft || {}) };
+  const e = etkinBildirimAyarlariVeri(b, genel);
+  return [
+    `${e.gun} gün önce`,
+    `saat ${e.saat}`,
+    `e-posta ${e.eposta ? "açık" : "kapalı"}`,
+    `WhatsApp ${e.whatsapp ? "açık" : "kapalı"}`
+  ].join(" · ");
+};
+
+// Kiracının bekleyen bildirim durumu: hangi bildirim, kime gidecek?
+const kiracininBildirimDurumu = (tenant, contracts, payments, ayar) => {
+  const hatirlatmaGun = ayar && ayar.gun !== undefined ? ayar.gun : 3;
+  const kiracilaraGonderilir = !ayar || ayar.kiracilara !== false;
+  const malikeGonderilir = !ayar || ayar.malike !== false;
+  const sozlesme =
+    contracts.find((c) => c.tenantId === tenant.id && c.status === "Aktif") ||
+    contracts.find((c) => c.tenantId === tenant.id);
+  if (!sozlesme) return { tur: "yok", metin: "Sözleşme yok" };
+
+  let yaklasan = 0;
+  let gecikmis = 0;
+  payments
+    .filter((p) => p.contractId === sozlesme.id)
+    .forEach((p) => {
+      const tutar = Number(p.amount) || 0;
+      const odenen = Number(p.paidAmount) || 0;
+      if (tutar > 0 && odenen >= tutar) return; // ödenmiş
+      const fark = daysUntil(p.dueDate);
+      if (fark === null) return;
+      if (fark < 0) gecikmis += 1;
+      else if (fark <= hatirlatmaGun) yaklasan += 1;
+    });
+
+  if (gecikmis > 0)
+    return {
+      tur: "gecikme",
+      metin: `${gecikmis} gecikmiş ödeme · ${
+        malikeGonderilir ? "malike gider" : "kimseye gönderilmiyor"
+      }`
+    };
+  if (yaklasan > 0)
+    return {
+      tur: "vade",
+      metin: `${yaklasan} ödeme ${hatirlatmaGun} gün içinde · ${
+        kiracilaraGonderilir ? "kiracıya gider" : "kimseye gönderilmiyor"
+      }`
+    };
+  return { tur: "yok", metin: "Bekleyen bildirim yok" };
+};
+
+// Toplu düzenlemede dört durum: dokunma / genel / açık / kapalı.
+const BOS_TOPLU = {
+  secilenler: [],
+  gunMod: "degistirme",
+  gun: "",
+  saatMod: "degistirme",
+  saat: "09:00",
+  eposta: "degistirme",
+  whatsapp: "degistirme",
+  kiracilaraGonder: "degistirme",
+  malikeGonder: "degistirme"
+};
+
+function TopluSecim({ label, value, onChange, acik, kapali }) {
+  return (
+    <label className="hy-field">
+      <span>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="degistirme">Değiştirme</option>
+        <option value="genel">Genel ayarı kullan</option>
+        <option value="acik">{acik || "Açık"}</option>
+        <option value="kapali">{kapali || "Kapalı"}</option>
+      </select>
+    </label>
+  );
+}
+
+// Üç durumlu seçim: genel ayarı kullan / açık / kapalı.
+function UcDurum({ label, value, onChange, acik, kapali }) {
+  return (
+    <label className="hy-field">
+      <span>{label}</span>
+      <select
+        value={value === true ? "acik" : value === false ? "kapali" : "genel"}
+        onChange={(e) =>
+          onChange(e.target.value === "genel" ? null : e.target.value === "acik")
+        }
+      >
+        <option value="genel">Genel ayarı kullan</option>
+        <option value="acik">{acik || "Açık"}</option>
+        <option value="kapali">{kapali || "Kapalı"}</option>
+      </select>
+    </label>
+  );
+}
+
+// Bulut bağlantı durumu göstergesi: "Bulut bağlı" / "Yerel mod".
+function CloudBadge({ state, detail }) {
+  const map = {
+    ok: { text: "Bulut bağlı", bg: "#ECFDF5", color: "#065F46", border: "#A7F3D0" },
+    error: { text: "Yerel mod · bulut hatası", bg: "#FEF3C7", color: "#92400E", border: "#FDE68A" },
+    local: { text: "Yerel mod", bg: "#F3F4F6", color: "#374151", border: "#E5E7EB" }
+  };
+  const s = map[state] || map.local;
+  return (
+    <span
+      title={
+        state === "error" && detail
+          ? `Bulut hatası: ${detail}`
+          : detail || "Veriler bu cihazda ve bulutta senkron tutulur."
+      }
+      style={{
+        background: s.bg,
+        color: s.color,
+        border: `1px solid ${s.border}`,
+        borderRadius: 999,
+        padding: "4px 10px",
+        fontSize: "11.5px",
+        fontWeight: 700,
+        whiteSpace: "nowrap"
+      }}
+    >
+      {s.text}
+    </span>
+  );
+}
+
 function Modal({ title, onClose, children, wide }) {
   return (
     <div className="hy-modal-backdrop" onClick={onClose}>
@@ -376,10 +518,7 @@ function Modal({ title, onClose, children, wide }) {
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [properties, setProperties] = useState([]);
-  const [pdfQueue, setPdfQueue] = useState([
-    { id: "1", name: "C blok 27.pdf", status: "Tamamlandı", size: "1240 KB", tenant: "FAZIL GÜNEŞ YAPI İNŞAAT SANAYİ VE TİCARET LTD.ŞTİ." },
-    { id: "2", name: "D blok 14.pdf", status: "Hata", size: "1787 KB", error: "503 Service Unavailable" }
-  ]);
+  const [pdfQueue, setPdfQueue] = useState([]);
   const [filter, setFilter] = useState("tum");
   const [contractScanForm, setContractScanForm] = useState({
     tasinmazNo: "", propertyAd: "", ilce: "", landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
@@ -392,26 +531,10 @@ export default function App() {
   const [maintenance, setMaintenance] = useState([]);
   const [promissoryNotes, setPromissoryNotes] = useState([]);
   const [documents, setDocuments] = useState([]);
-  const [bankStatements, setBankStatements] = useState([
-    {
-      id: "bs1",
-      date: "2026-06-25",
-      description: "HAVALE/EFT ADAM KHODR KİRA ÖDEMESİ",
-      amount: "30000",
-      matched: true
-    }
-  ]);
+  const [bankStatements, setBankStatements] = useState([]);
   const [yuklenenEkstre, setYuklenenEkstre] = useState(null);
   const [islemDurumu, setIslemDurumu] = useState("");
-  const [bankIntegrations, setBankIntegrations] = useState([
-    {
-      id: "b1",
-      bankName: "VakıfBank",
-      iban: "TR55 5555 5555 5555 5555 55 55",
-      status: "Tamamlanmadı",
-      date: "8 Eyl 2026"
-    }
-  ]);
+  const [bankIntegrations, setBankIntegrations] = useState([]);
   const [accountingData, setAccountingData] = useState({
     product: "Logo Yazılım",
     firmaUnvani: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
@@ -422,23 +545,44 @@ export default function App() {
     adres: "Yenişehir Mah. Reyhan Cad. No:43",
     connected: true
   });
+  // Profil hesaba bağlıdır; PIN/şifre burada tutulmaz (Supabase Auth yönetir).
   const [profile, setProfile] = useState({
-    firstName: "HALİL İBRAHİM",
-    lastName: "ASLAN",
-    email: "halilasslan@gmail.com",
-    adminPin: "1234"
+    firstName: "",
+    lastName: "",
+    email: ""
   });
   const [uiOpacity, setUiOpacity] = useState(0.95);
 
-  const [authRole, setAuthRole] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  // --- Kimlik doğrulama (Supabase Auth) -----------------------------------
+  const [authReady, setAuthReady] = useState(false);
+  const [session, setSession] = useState(null);
+  const [screen, setScreen] = useState("login"); // login | signup
+  const [authError, setAuthError] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  
+
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupPhone, setSignupPhone] = useState("");
+  const [signupRole, setSignupRole] = useState("owner"); // owner | tenant
+
+  const [accountRole, setAccountRole] = useState("owner");
+  const [cloudState, setCloudState] = useState("local"); // local | ok | error
+  const [cloudDetail, setCloudDetail] = useState("");
+  const [tenantView, setTenantView] = useState([]);
+  const [yeniSifre, setYeniSifre] = useState("");
+  const [profilMesaji, setProfilMesaji] = useState("");
+  const [bildirimAyarlari, setBildirimAyarlari] = useState(
+    DEFAULT_BILDIRIM_AYARLARI
+  );
+  const [bildirimKayitlari, setBildirimKayitlari] = useState([]);
+  const [kiraciBildirimleri, setKiraciBildirimleri] = useState([]);
+  const [bildirimMesaji, setBildirimMesaji] = useState("");
+  const [bildirimCalisiyor, setBildirimCalisiyor] = useState(false);
+  const accountEmail = session?.user?.email || "";
 
   const [tab, setTab] = useState("ozet");
   const [paymentFilterTab, setPaymentFilterTab] = useState("Tümü");
@@ -601,7 +745,269 @@ export default function App() {
     alert(`"${item.name}" dosyasından başarıyla okunan veriler form kutucuklarına aktarıldı!`);
   };
 
+  // --- Oturum ve hesap yönetimi -------------------------------------------
+  // Bulut durumunu depolama katmanından arayüze taşır.
   useEffect(() => {
+    onCloudStatus((state, detail) => {
+      setCloudState(state);
+      setCloudDetail(detail);
+    });
+  }, []);
+
+  const loadAccountRole = async (user) => {
+    const meta = user?.user_metadata?.role;
+    if (meta === "owner" || meta === "tenant") return meta;
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (data?.role === "owner" || data?.role === "tenant") return data.role;
+    } catch (e) {
+      /* profil tablosu kurulmadıysa varsayılana düşülür */
+    }
+    return "owner";
+  };
+
+  // Kiracı yalnızca kendi e-postasına yayınlanmış kaydı görür; süzme RLS'te.
+  const loadTenantView = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("tenant_access")
+        .select("*")
+        .order("updated_at", { ascending: false });
+      if (error) throw error;
+      reportCloud("ok");
+      setTenantView(data || []);
+    } catch (e) {
+      reportCloud("error", hataMetni(e));
+      setTenantView([]);
+    }
+  };
+
+  // Eski sürüm tek bir paylaşılan yerel alan kullanıyordu (hasyek:*). İlk girişte
+  // bu kayıtları kullanıcının kendi alanına taşıyoruz ki başka hesap devralmasın.
+  const migrateLegacyLocalData = async () => {
+    const tasinan = [];
+    for (const key of Object.values(STORAGE_KEYS)) {
+      const eski = localStorage.getItem(key);
+      if (eski === null) continue;
+      if (localStorage.getItem(localKeyFor(key)) === null) {
+        localStorage.setItem(localKeyFor(key), eski);
+        tasinan.push(key);
+      }
+      localStorage.removeItem(key);
+    }
+    for (const key of tasinan) {
+      const deger = localStorage.getItem(localKeyFor(key));
+      if (deger === null) continue;
+      try {
+        await window.storage.set(key, deger);
+      } catch (e) {
+        /* bulut yoksa yerel kopya yeterli */
+      }
+    }
+    return tasinan;
+  };
+
+  const applySession = async (s) => {
+    setSessionUser(s.user.id);
+    setSession(s);
+    const rol = await loadAccountRole(s.user);
+    setAccountRole(rol);
+    if (rol === "owner") await migrateLegacyLocalData();
+    else await loadTenantView();
+  };
+
+  // Açılışta mevcut oturumu geri yükle, sonra değişiklikleri dinle.
+  useEffect(() => {
+    let alive = true;
+    let abonelik = null;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (alive && data?.session) await applySession(data.session);
+      } catch (e) {
+        reportCloud("error", hataMetni(e));
+      }
+      if (!alive) return;
+      setAuthReady(true);
+      const res = supabase.auth.onAuthStateChange(async (evt, s) => {
+        if (!alive) return;
+        if (evt === "SIGNED_OUT" || !s) {
+          setSessionUser(null);
+          setSession(null);
+          setAccountRole("owner");
+          setTenantView([]);
+          return;
+        }
+        await applySession(s);
+      });
+      abonelik = res?.data?.subscription || null;
+    })();
+    return () => {
+      alive = false;
+      try {
+        abonelik?.unsubscribe();
+      } catch (e) {
+        /* yok say */
+      }
+    };
+  }, []);
+
+  const handleLogin = async () => {
+    setAuthError("");
+    setInfoMessage("");
+    if (!loginEmail.trim() || !loginPassword) {
+      setAuthError("E-posta ve şifrenizi girin.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginEmail.trim(),
+        password: loginPassword
+      });
+      if (error) {
+        setAuthError(turkceAuthHatasi(error.message));
+        return;
+      }
+      setLoginPassword("");
+    } catch (e) {
+      setAuthError(turkceAuthHatasi(hataMetni(e)));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignup = async () => {
+    setAuthError("");
+    setInfoMessage("");
+    if (!signupName.trim() || !signupEmail.trim() || !signupPassword) {
+      setAuthError("Ad soyad, e-posta ve şifre zorunludur.");
+      return;
+    }
+    if (signupPassword.length < 6) {
+      setAuthError("Şifre en az 6 karakter olmalı.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: signupEmail.trim(),
+        password: signupPassword,
+        options: {
+          data: {
+            full_name: signupName.trim(),
+            phone: signupPhone.trim(),
+            role: signupRole
+          }
+        }
+      });
+      if (error) {
+        setAuthError(turkceAuthHatasi(error.message));
+        return;
+      }
+      if (data?.user) {
+        try {
+          // Rolün kalıcı kaydı; şema kurulmadıysa user_metadata'da kalır.
+          await supabase.from("profiles").upsert({
+            id: data.user.id,
+            role: signupRole,
+            full_name: signupName.trim(),
+            phone: signupPhone.trim()
+          });
+        } catch (e) {
+          /* yok say */
+        }
+      }
+      setSignupPassword("");
+      if (!data?.session) {
+        setInfoMessage(
+          `Hesabınız oluşturuldu. Giriş yapabilmek için ${signupEmail.trim()} adresine gelen doğrulama bağlantısına tıklayın.`
+        );
+        setLoginEmail(signupEmail.trim());
+        setScreen("login");
+      }
+    } catch (e) {
+      setAuthError(turkceAuthHatasi(hataMetni(e)));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setAuthError("");
+    setInfoMessage("");
+    if (!loginEmail.trim()) {
+      setAuthError("Şifre sıfırlama için önce e-posta adresinizi girin.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        loginEmail.trim()
+      );
+      if (error) {
+        setAuthError(turkceAuthHatasi(error.message));
+        return;
+      }
+      setInfoMessage(
+        `Şifre sıfırlama bağlantısı ${loginEmail.trim()} adresine gönderildi. Bağlantıya tıklayıp yeni şifrenizi belirleyin.`
+      );
+    } catch (e) {
+      setAuthError(turkceAuthHatasi(hataMetni(e)));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      /* yerel oturumu yine de kapatıyoruz */
+    }
+    setSessionUser(null);
+    setSession(null);
+    setAccountRole("owner");
+    setTenantView([]);
+    setScreen("login");
+    setLoginPassword("");
+    setAuthError("");
+    setInfoMessage("");
+  };
+
+  const handlePasswordChange = async () => {
+    setProfilMesaji("");
+    if (yeniSifre.length < 6) {
+      setProfilMesaji("Yeni şifre en az 6 karakter olmalı.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: yeniSifre });
+      if (error) {
+        setProfilMesaji(turkceAuthHatasi(error.message));
+        return;
+      }
+      setYeniSifre("");
+      setProfilMesaji("Şifreniz güncellendi.");
+    } catch (e) {
+      setProfilMesaji(turkceAuthHatasi(hataMetni(e)));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  // Veriler yalnızca oturum bilindikten sonra, o kullanıcının alanından yüklenir.
+  useEffect(() => {
+    if (!authReady) return;
+    if (!session) {
+      setLoaded(true);
+      return;
+    }
     let alive = true;
     (async () => {
       const load = async (key, setter, fallback) => {
@@ -610,7 +1016,7 @@ export default function App() {
           if (alive) {
             if (res && res.value) {
               const parsed = JSON.parse(res.value);
-              setter(Array.isArray(parsed) && parsed.length === 0 ? fallback : parsed);
+              setter(dropLegacySeed(parsed));
             } else {
               setter(fallback);
             }
@@ -620,13 +1026,13 @@ export default function App() {
         }
       };
       await Promise.all([
-        load(STORAGE_KEYS.properties, setProperties, DEFAULT_PROPERTIES),
-        load(STORAGE_KEYS.people, setPeople, DEFAULT_PEOPLE),
-        load(STORAGE_KEYS.contracts, setContracts, DEFAULT_CONTRACTS),
-        load(STORAGE_KEYS.payments, setPayments, DEFAULT_PAYMENTS),
+        load(STORAGE_KEYS.properties, setProperties, []),
+        load(STORAGE_KEYS.people, setPeople, []),
+        load(STORAGE_KEYS.contracts, setContracts, []),
+        load(STORAGE_KEYS.payments, setPayments, []),
         load(STORAGE_KEYS.expenses, setExpenses, []),
         load(STORAGE_KEYS.maintenance, setMaintenance, []),
-        load(STORAGE_KEYS.promissoryNotes, setPromissoryNotes, DEFAULT_NOTES),
+        load(STORAGE_KEYS.promissoryNotes, setPromissoryNotes, []),
         load(STORAGE_KEYS.documents, setDocuments, []),
         load(STORAGE_KEYS.bankStatements, setBankStatements, []),
         load(STORAGE_KEYS.bankIntegrations, setBankIntegrations, []),
@@ -641,19 +1047,40 @@ export default function App() {
           connected: true
         }),
         load(STORAGE_KEYS.profile, setProfile, {
-          firstName: "HALİL İBRAHİM",
-          lastName: "ASLAN",
-          email: "halilasslan@gmail.com",
-          adminPin: "1234"
+          firstName: "",
+          lastName: "",
+          email: session?.user?.email || ""
         }),
-        load(STORAGE_KEYS.opacity, setUiOpacity, 0.95)
+        load(STORAGE_KEYS.opacity, setUiOpacity, 0.95),
+        load(
+          STORAGE_KEYS.notifications,
+          setBildirimAyarlari,
+          DEFAULT_BILDIRIM_AYARLARI
+        )
       ]);
       if (alive) setLoaded(true);
     })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [authReady, session?.user?.id]);
+
+  // Hesap e-postası ve adı, profilde eksikse oturum bilgisinden tamamlanır.
+  useEffect(() => {
+    if (!loaded || !session) return;
+    const eposta = session.user.email || "";
+    const metaAd = (session.user.user_metadata?.full_name || "").trim();
+    setProfile((p) => {
+      if (p.email === eposta && (p.firstName || !metaAd)) return p;
+      const next = { ...p, email: eposta || p.email };
+      if (!next.firstName && metaAd) {
+        const [ilk, ...kalan] = metaAd.split(" ");
+        next.firstName = ilk;
+        next.lastName = kalan.join(" ");
+      }
+      return next;
+    });
+  }, [loaded, session?.user?.id]);
 
   const persist = async (key, value, setter) => {
     setter(value);
@@ -684,6 +1111,296 @@ export default function App() {
   };
   const savePerson = (p) =>
     persist(STORAGE_KEYS.people, upsert(people, p), setPeople);
+
+  // Kiracının kendi hesabından göreceği veri paketi: aktif sözleşme + o
+  // sözleşmeye bağlı ödemeler. Hem elle hem otomatik yayında aynı kaynak.
+  const buildTenantAccessPayload = (tenant, eposta) => {
+    const sozlesme =
+      contracts.find((c) => c.tenantId === tenant.id && c.status === "Aktif") ||
+      contracts.find((c) => c.tenantId === tenant.id);
+    const odemeler = payments
+      .filter((p) => sozlesme && p.contractId === sozlesme.id)
+      .map((p) => ({
+        id: p.id,
+        dueDate: p.dueDate,
+        amount: p.amount,
+        paidAmount: p.paidAmount || 0,
+        paidDate: p.paidDate || null
+      }));
+
+    return {
+      owner_id: session?.user?.id || null,
+      tenant_email: eposta,
+      tenant_name: tenant.name || "",
+      tenant_phone: (tenant.phone || "").trim(),
+      bildirim_ayarlari: tenantBildirimAyarlari(tenant),
+      property_label: sozlesme
+        ? propertyDisplayName(properties.find((x) => x.id === sozlesme.propertyId))
+        : "",
+      rent_amount: Number(sozlesme?.rentAmount || tenant.rentAmount || 0),
+      start_date: sozlesme?.startDate || null,
+      end_date: sozlesme?.endDate || null,
+      payments: odemeler,
+      updated_at: new Date().toISOString()
+    };
+  };
+
+  // Yalnızca anlamlı alanlardan imza üretir; aynı veri ikinci kez yazılmaz.
+  const tenantAccessSignature = (kayit) =>
+    JSON.stringify({
+      email: kayit.tenant_email,
+      name: kayit.tenant_name,
+      property: kayit.property_label,
+      rent: kayit.rent_amount,
+      start: kayit.start_date,
+      end: kayit.end_date,
+      payments: kayit.payments,
+      bildirim: kayit.bildirim_ayarlari || {}
+    });
+
+  // Kaydı Supabase'e yayınlar/günceller. Kiracı bu satırı yalnızca e-postası
+  // eşleştiği için okuyabilir (RLS). sessiz=true iken bildirim göstermez.
+  const publishTenantAccess = async (tenant, eposta, opts = {}) => {
+    const sessiz = opts.silent === true;
+    const temizEposta = (eposta || "").trim().toLowerCase();
+    if (!temizEposta) {
+      if (!sessiz) alert("Önce kiracının e-posta adresini girin.");
+      return false;
+    }
+    if (!session?.user?.id) {
+      if (!sessiz) alert("Bu işlem için oturum açmanız gerekiyor.");
+      return false;
+    }
+
+    const kayit = buildTenantAccessPayload(tenant, temizEposta);
+    const imza = tenantAccessSignature(kayit);
+    // E-posta değişmişse eski adrese yayınlanmış satır ortada kalmamalı.
+    const eskiEposta = (tenant.tenantShare?.email || "").trim().toLowerCase();
+
+    try {
+      const { data: mevcut, error: aramaHatasi } = await supabase
+        .from("tenant_access")
+        .select("id")
+        .eq("owner_id", session.user.id)
+        .eq("tenant_email", temizEposta)
+        .maybeSingle();
+      if (aramaHatasi) throw aramaHatasi;
+
+      if (mevcut?.id) {
+        const { error } = await supabase
+          .from("tenant_access")
+          .update(kayit)
+          .eq("id", mevcut.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("tenant_access").insert(kayit);
+        if (error) throw error;
+      }
+
+      if (eskiEposta && eskiEposta !== temizEposta) {
+        try {
+          await supabase
+            .from("tenant_access")
+            .delete()
+            .eq("owner_id", session.user.id)
+            .eq("tenant_email", eskiEposta);
+        } catch (e) {
+          /* eski satır silinemese de yeni yayın geçerlidir */
+        }
+      }
+
+      reportCloud("ok");
+      // İmzayı sakla: sonraki değişiklikte tazelenmesi gerektiğini anlarız.
+      savePerson({
+        ...tenant,
+        email: temizEposta,
+        tenantShare: {
+          email: temizEposta,
+          publishedAt: new Date().toISOString(),
+          signature: imza
+        }
+      });
+      if (!sessiz) {
+        alert(
+          `${tenant.name} için ${kayit.payments.length} ödeme kaydı kiracı girişine açıldı.`
+        );
+      }
+      return true;
+    } catch (e) {
+      reportCloud("error", hataMetni(e));
+      if (!sessiz) {
+        alert(
+          "Kayıt yayınlanamadı: " +
+            hataMetni(e) +
+            "\n\nSupabase tarafında supabase/schema.sql dosyasının çalıştırıldığından emin olun."
+        );
+      }
+      return false;
+    }
+  };
+
+  // Yayını kapatır: satırı siler ve kiracıdaki yayın işaretini kaldırır.
+  const unpublishTenantAccess = async (tenant) => {
+    const eposta = (tenant.tenantShare?.email || tenant.email || "")
+      .trim()
+      .toLowerCase();
+    if (!session?.user?.id || !eposta) return;
+    try {
+      const { error } = await supabase
+        .from("tenant_access")
+        .delete()
+        .eq("owner_id", session.user.id)
+        .eq("tenant_email", eposta);
+      if (error) throw error;
+      reportCloud("ok");
+      const kalan = { ...tenant };
+      delete kalan.tenantShare;
+      savePerson(kalan);
+      alert(`${tenant.name} için kiracı girişi kapatıldı.`);
+    } catch (e) {
+      reportCloud("error", hataMetni(e));
+      alert("Yayın kapatılamadı: " + hataMetni(e));
+    }
+  };
+
+  // Otomatik tazeleme: yayınlanmış kiracıların kaydı, sözleşme veya ödeme
+  // değiştiğinde kendiliğinden güncellenir. Aynı veri için tekrar yazmaz.
+  useEffect(() => {
+    if (!loaded || !session?.user?.id || accountRole !== "owner") return;
+    if (cloudState === "error") return; // bulut çalışmıyorsa boşuna denemeyelim
+
+    // Hedef e-posta kiracı kaydındaki güncel adrestir; yayın işareti yalnızca
+    // son yayınlanan adresi taşır.
+    const bekleyenler = people
+      .filter((k) => k.role === "Kiracı" && k.tenantShare)
+      .map((k) => ({
+        kiraci: k,
+        eposta: (k.email || k.tenantShare.email || "").trim().toLowerCase(),
+        eskiEposta: (k.tenantShare.email || "").trim().toLowerCase()
+      }))
+      .filter(({ kiraci, eposta, eskiEposta }) => {
+        if (!eposta) return false;
+        if (eskiEposta !== eposta) return true;
+        const kayit = buildTenantAccessPayload(kiraci, eposta);
+        return tenantAccessSignature(kayit) !== kiraci.tenantShare.signature;
+      });
+    if (bekleyenler.length === 0) return;
+
+    const zamanlayici = setTimeout(() => {
+      bekleyenler.forEach(({ kiraci, eposta }) =>
+        publishTenantAccess(kiraci, eposta, { silent: true })
+      );
+    }, 1200);
+    return () => clearTimeout(zamanlayici);
+  }, [
+    loaded,
+    session?.user?.id,
+    accountRole,
+    cloudState,
+    people,
+    contracts,
+    payments,
+    properties
+  ]);
+  // --- Bildirimler ---------------------------------------------------------
+  const saveBildirimAyarlari = (yeni) =>
+    persist(STORAGE_KEYS.notifications, yeni, setBildirimAyarlari);
+
+  // Kiracı ayarında "genel ayarı kullan" seçilirse alan tamamen silinir.
+  const tenantBildirimGuncelle = (anahtar, deger) => {
+    setTenantBildirimDraft((onceki) => {
+      const yeni = { ...onceki };
+      if (deger === null || deger === undefined || deger === "") {
+        delete yeni[anahtar];
+      } else {
+        yeni[anahtar] = deger;
+      }
+      return yeni;
+    });
+  };
+
+  const bildirimKayitlariniYukle = async () => {
+    if (!session?.user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from("bildirim_kayitlari")
+        .select("id,tur,kanal,alici,durum,hata,gonderim_gun,created_at")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      setBildirimKayitlari(data || []);
+    } catch (e) {
+      setBildirimKayitlari([]);
+    }
+  };
+
+  // Sunucudaki günlük fonksiyonu elde çalıştırır (test / anında gönderim).
+  const bildirimleriSimdiCalistir = async () => {
+    setBildirimMesaji("");
+    setBildirimCalisiyor(true);
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "gunluk-bildirim",
+        { body: { zorla: true } }
+      );
+      if (error) throw error;
+      const ozet = data || {};
+      if (ozet.hata && !ozet.gonderilen) {
+        setBildirimMesaji(String(ozet.hata));
+      } else {
+        const ilkHata =
+          Array.isArray(ozet.ayrinti) && ozet.ayrinti.length > 0
+            ? " İlk hata: " + (ozet.ayrinti[0].hata || "")
+            : "";
+        setBildirimMesaji(
+          `${ozet.gonderilen || 0} bildirim gönderildi, ${ozet.atlanan || 0} atlandı` +
+            (ozet.hata ? `, ${ozet.hata} hata.` : ".") +
+            ilkHata
+        );
+      }
+      await bildirimKayitlariniYukle();
+    } catch (e) {
+      setBildirimMesaji(
+        "Çalıştırılamadı: " +
+          hataMetni(e) +
+          " · Fonksiyon kurulu mu? (supabase functions deploy gunluk-bildirim)"
+      );
+    } finally {
+      setBildirimCalisiyor(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!loaded || !session?.user?.id || accountRole !== "owner") return;
+    bildirimKayitlariniYukle();
+  }, [loaded, session?.user?.id, accountRole]);
+
+  // Kiracı panelindeki bildirim geçmişi. Sunucu tarafı süzme RLS'te: kiracı
+  // yalnızca kendi e-postasına gönderilen kayıtları okuyabilir, malike giden
+  // gecikme bildirimleri görünmez (alici_tur = 'malik').
+  const kiraciBildirimleriniYukle = async () => {
+    if (!session?.user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from("bildirim_kayitlari")
+        .select("id,tur,kanal,durum,hata,gonderim_gun,created_at,payment_id")
+        .eq("alici_tur", "kiraci")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      setKiraciBildirimleri(
+        (data || []).filter((k) => !k.alici_tur || k.alici_tur === "kiraci")
+      );
+    } catch (e) {
+      setKiraciBildirimleri([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!loaded || !session?.user?.id || accountRole !== "tenant") return;
+    kiraciBildirimleriniYukle();
+  }, [loaded, session?.user?.id, accountRole]);
+
   const deleteTenantCompletely = (id) => {
     persist(STORAGE_KEYS.people, removeById(people, id), setPeople);
     setSelectedTenantId(null);
@@ -799,6 +1516,7 @@ export default function App() {
     },
     { id: "senetler", label: "Senet Yönetimi", icon: Receipt },
     { id: "kiracilar", label: "Kiracılarım", icon: Users },
+    { id: "bildirimler", label: "Bildirim Doğrulama", icon: Bell },
     {
       id: "muhasebe_entegrasyonu",
       label: "Muhasebe Entegrasyonu",
@@ -840,6 +1558,78 @@ export default function App() {
   const [tenantDetailTab, setTenantDetailTab] = useState("borclar");
   const [tenantEditModalOpen, setTenantEditModalOpen] = useState(false);
   const [tenantEditDraft, setTenantEditDraft] = useState(null);
+  const [tenantEmailDraft, setTenantEmailDraft] = useState("");
+  const [tenantBildirimDraft, setTenantBildirimDraft] = useState({});
+  const [topluModal, setTopluModal] = useState(false);
+  const [topluDraft, setTopluDraft] = useState(() => ({ ...BOS_TOPLU }));
+
+  // Seçilen kiracının e-posta ve bildirim alanlarını forma yansıt.
+  useEffect(() => {
+    const t = people.find((p) => p.id === selectedTenantId);
+    setTenantEmailDraft(t?.email || "");
+    setTenantBildirimDraft(t?.bildirim ? { ...t.bildirim } : {});
+  }, [selectedTenantId, people]);
+
+  // Seçilen kiracılara toplu bildirim ayarı uygular (tek yazma işlemi).
+  const topluBildirimUygula = () => {
+    if (topluDraft.secilenler.length === 0) {
+      alert("Önce en az bir kiracı seçin.");
+      return;
+    }
+    if (topluDraft.gunMod === "deger" && topluDraft.gun === "") {
+      alert("Hatırlatma için bir gün sayısı girin (0 = vade günü).");
+      return;
+    }
+    if (topluDraft.saatMod === "deger" && !topluDraft.saat) {
+      alert("Gönderim saati için bir saat seçin.");
+      return;
+    }
+
+    const uygula = (mevcut) => {
+      const yeni = { ...(mevcut || {}) };
+      const degerVeyaSil = (mod, anahtar, deger) => {
+        if (mod === "genel") delete yeni[anahtar];
+        else if (mod === "deger") yeni[anahtar] = deger;
+      };
+      const bayrak = (mod, anahtar) => {
+        if (mod === "genel") delete yeni[anahtar];
+        else if (mod === "acik") yeni[anahtar] = true;
+        else if (mod === "kapali") yeni[anahtar] = false;
+      };
+      degerVeyaSil(topluDraft.gunMod, "hatirlatmaGun", Number(topluDraft.gun));
+      degerVeyaSil(topluDraft.saatMod, "gonderimSaati", topluDraft.saat);
+      bayrak(topluDraft.eposta, "eposta");
+      bayrak(topluDraft.whatsapp, "whatsapp");
+      bayrak(topluDraft.kiracilaraGonder, "kiracilaraGonder");
+      bayrak(topluDraft.malikeGonder, "malikeGonder");
+      return yeni;
+    };
+
+    const yayinVar = people.some(
+      (k) => topluDraft.secilenler.includes(k.id) && k.tenantShare
+    );
+    const yeniListe = people.map((k) => {
+      if (!topluDraft.secilenler.includes(k.id)) return k;
+      const b = uygula(k.bildirim);
+      if (Object.keys(b).length === 0) {
+        const kopya = { ...k };
+        delete kopya.bildirim;
+        return kopya;
+      }
+      return { ...k, bildirim: b };
+    });
+
+    persist(STORAGE_KEYS.people, yeniListe, setPeople);
+    const sayi = topluDraft.secilenler.length;
+    setTopluModal(false);
+    setTopluDraft({ ...BOS_TOPLU });
+    alert(
+      `${sayi} kiracının bildirim ayarları güncellendi.` +
+        (yayinVar
+          ? " Yayındaki kiracıların sunucu kayıtları birkaç saniye içinde kendiliğinden güncellenir."
+          : "")
+    );
+  };
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [editingProperty, setEditingProperty] = useState(null);
@@ -937,7 +1727,7 @@ export default function App() {
     );
   }
 
-  if (!authRole) {
+  if (!session && screen !== "signup") {
     return (
       <div className="hy-app" style={{ opacity: uiOpacity }}>
         <div className="hy-new-login-container">
@@ -996,6 +1786,9 @@ export default function App() {
                 placeholder="Şifreniz"
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !authBusy) handleLogin();
+                }}
                 style={{
                   padding: "12px 14px",
                   borderRadius: 10,
@@ -1005,56 +1798,74 @@ export default function App() {
                 }}
               />
 
+              {infoMessage && (
+                <div
+                  style={{
+                    background: "#ECFDF5",
+                    color: "#065F46",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    fontSize: "12.5px",
+                    textAlign: "left"
+                  }}
+                >
+                  {infoMessage}
+                </div>
+              )}
+
+              {authError && (
+                <div
+                  style={{
+                    background: "#FEF2F2",
+                    color: "#991B1B",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    fontSize: "12.5px",
+                    textAlign: "left"
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
+
               <button
                 className="hy-new-login-btn primary"
-                onClick={async () => {
-                  if (!loginEmail || !loginPassword) {
-                    alert("Lütfen e-posta ve şifrenizi girin!");
-                    return;
-                  }
-                  if (loginEmail === profile.email && loginPassword === profile.adminPin) {
-                    setAuthRole("admin");
-                    return;
-                  }
-                  try {
-                    const { data, error } = await supabase.auth.signInWithPassword({
-                      email: loginEmail,
-                      password: loginPassword,
-                    });
-                    if (error) {
-                      setAuthRole("admin");
-                    } else if (data.user) {
-                      setAuthRole("admin");
-                    }
-                  } catch (err) {
-                    setAuthRole("admin");
-                  }
-                }}
+                disabled={authBusy}
+                style={{ opacity: authBusy ? 0.7 : 1 }}
+                onClick={handleLogin}
               >
-                E-Posta ile Giriş Yap ›
+                {authBusy ? "Giriş yapılıyor…" : "E-Posta ile Giriş Yap ›"}
               </button>
 
               <button
-                className="hy-new-login-btn secondary"
-                onClick={() => {
-                  const tName = prompt("Kiracı Adınızı Girin:");
-                  const found = people.find(
-                    (p) =>
-                      p.role === "Kiracı" &&
-                      p.name
-                        .toLowerCase()
-                        .includes((tName || "").toLowerCase())
-                  );
-                  if (found) {
-                    setAuthRole("tenant");
-                    setCurrentUser(found);
-                  } else {
-                    alert("Kiracı sistemde bulunamadı!");
-                  }
+                type="button"
+                disabled={authBusy}
+                onClick={handlePasswordReset}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#6B7280",
+                  fontSize: "12.5px",
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline"
                 }}
               >
-                Kiracı Olarak Giriş Yap ›
+                Şifremi unuttum
               </button>
+
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6B7280",
+                  textAlign: "center",
+                  margin: 0,
+                  lineHeight: 1.5
+                }}
+              >
+                Kiracılar da aynı ekrandan giriş yapar; hesapları, kayıt olurken
+                seçtikleri e-posta ve şifreyle çalışır.
+              </p>
 
               <div style={{ textAlign: "center", marginTop: 8 }}>
                 <span style={{ fontSize: "13px", color: "#6B7280" }}>Hesabınız yok mu? </span>
@@ -1069,7 +1880,11 @@ export default function App() {
                     cursor: "pointer",
                     padding: 0
                   }}
-                  onClick={() => setAuthRole("signup")}
+                  onClick={() => {
+                    setAuthError("");
+                    setInfoMessage("");
+                    setScreen("signup");
+                  }}
                 >
                   Üye Ol
                 </button>
@@ -1148,7 +1963,7 @@ export default function App() {
     );
   }
 
-  if (authRole === "signup") {
+  if (!session && screen === "signup") {
     return (
       <div className="hy-app" style={{ opacity: uiOpacity }}>
         <div className="hy-new-login-container">
@@ -1242,24 +2057,63 @@ export default function App() {
                 }}
               />
 
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: "13px", color: "#374151", fontWeight: 600 }}>
+                  Hesap türü
+                </span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[
+                    { id: "owner", label: "Malik / Yönetici" },
+                    { id: "tenant", label: "Kiracı" }
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSignupRole(opt.id)}
+                      style={{
+                        flex: 1,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        fontSize: "12.5px",
+                        fontWeight: 600,
+                        background: signupRole === opt.id ? "#E53935" : "#F3F4F6",
+                        color: signupRole === opt.id ? "#fff" : "#374151",
+                        border: "1px solid " + (signupRole === opt.id ? "#E53935" : "#E5E7EB")
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <span style={{ fontSize: "11.5px", color: "#6B7280", lineHeight: 1.5 }}>
+                  Kiracı hesapları yalnızca malikin kendileri için yayınladığı
+                  sözleşme ve ödeme bilgilerini görür.
+                </span>
+              </div>
+
+              {authError && (
+                <div
+                  style={{
+                    background: "#FEF2F2",
+                    color: "#991B1B",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    fontSize: "12.5px",
+                    textAlign: "left"
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
+
               <button
                 className="hy-new-login-btn primary"
-                onClick={() => {
-                  if (!signupName || !signupEmail || !signupPassword) {
-                    alert("Lütfen zorunlu alanları doldurun!");
-                    return;
-                  }
-                  setProfile({
-                    firstName: signupName.split(" ")[0] || signupName,
-                    lastName: signupName.split(" ").slice(1).join(" ") || "",
-                    email: signupEmail,
-                    adminPin: signupPassword
-                  });
-                  alert("Kayıt başarıyla oluşturuldu! Giriş yapabilirsiniz.");
-                  setAuthRole(null);
-                }}
+                disabled={authBusy}
+                style={{ opacity: authBusy ? 0.7 : 1 }}
+                onClick={handleSignup}
               >
-                Kayıt Ol ve Devam Et ›
+                {authBusy ? "Kayıt oluşturuluyor…" : "Kayıt Ol ve Devam Et ›"}
               </button>
 
               <div style={{ textAlign: "center", marginTop: 8 }}>
@@ -1273,7 +2127,10 @@ export default function App() {
                     cursor: "pointer",
                     padding: 0
                   }}
-                  onClick={() => setAuthRole(null)}
+                  onClick={() => {
+                    setAuthError("");
+                    setScreen("login");
+                  }}
                 >
                   ‹ Geri Dön / Giriş Yap
                 </button>
@@ -1344,89 +2201,221 @@ export default function App() {
     );
   }
 
-  if (authRole === "tenant") {
-    const myContracts = contracts.filter(
-      (c) => c.tenantId === currentUser.id
+  if (accountRole === "tenant") {
+    // Bildirim kaydını ilgili ödeme vadesiyle eşleştirmek için sözlük.
+    const odemeVadeleri = {};
+    tenantView.forEach((kayit) =>
+      (kayit.payments || []).forEach((p) => {
+        if (p && p.id) odemeVadeleri[p.id] = p.dueDate;
+      })
     );
-    const myPayments = payments.filter((p) =>
-      myContracts.some((c) => c.id === p.contractId)
-    );
+
     return (
       <div className="hy-app" style={{ padding: 30, opacity: uiOpacity }}>
-        <div style={{ width: "100%", maxWidth: 800, margin: "0 auto" }}>
+        <div style={{ width: "100%", maxWidth: 900, margin: "0 auto" }}>
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              marginBottom: 20
+              marginBottom: 20,
+              gap: 12,
+              flexWrap: "wrap"
             }}
           >
-            <h2>
-              Hoş Geldiniz, {currentUser.name} (Kiracı Paneli - Salt Okunur)
-            </h2>
-            <button
-              className="hy-btn ghost sm"
-              onClick={() => setAuthRole(null)}
-            >
-              Çıkış Yap
-            </button>
+            <div>
+              <h2 style={{ margin: 0 }}>
+                Hoş Geldiniz{profile.firstName ? ", " + profile.firstName : ""}
+              </h2>
+              <p className="muted small" style={{ margin: "4px 0 0" }}>
+                {accountEmail} · Kiracı Paneli (Salt Okunur)
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <CloudBadge state={cloudState} detail={cloudDetail} />
+              <button className="hy-btn ghost sm" onClick={handleLogout}>
+                Çıkış Yap
+              </button>
+            </div>
           </div>
-          <h3 className="hy-h3">Sözleşmelerim & Mülk Bilgilerim</h3>
-          {myContracts.length === 0 ? (
-            <p className="hy-empty">Aktif sözleşmeniz bulunmuyor.</p>
+
+          {tenantView.length === 0 ? (
+            <div className="hy-panel">
+              <p className="hy-empty">
+                Henüz sizin için yayınlanmış bir kayıt yok. Malik / yönetici,
+                kiracı kaydınızda bu e-posta adresini tanımlayıp "Kiracı
+                Girişine Aç" demelidir.
+              </p>
+            </div>
           ) : (
-            myContracts.map((c) => (
-              <div key={c.id} className="hy-panel">
-                <p>
-                  <strong>Mülk:</strong> {propertyName(c.propertyId)}
+            tenantView.map((kayit) => (
+              <div key={kayit.id} className="hy-panel" style={{ marginBottom: 16 }}>
+                <h3 className="hy-h3" style={{ marginTop: 0 }}>
+                  {kayit.property_label || "Mülk bilgisi"}
+                </h3>
+                <p style={{ margin: "4px 0" }}>
+                  <strong>Aylık Kira:</strong> {fmtMoney(kayit.rent_amount)}
                 </p>
-                <p>
-                  <strong>Aylık Kira:</strong> {fmtMoney(c.rentAmount)}
+                <p style={{ margin: "4px 0" }}>
+                  <strong>Sözleşme:</strong> {fmtDate(kayit.start_date)} –{" "}
+                  {fmtDate(kayit.end_date)}
                 </p>
-                <p>
-                  <strong>Sözleşme Tarihi:</strong> {fmtDate(c.startDate)} –{" "}
-                  {fmtDate(c.endDate)}
+                <p className="muted small" style={{ margin: "4px 0 12px" }}>
+                  Son güncelleme: {fmtDate(kayit.updated_at)}
                 </p>
+
+                <h4 style={{ margin: "0 0 8px", fontSize: "13.5px" }}>
+                  Ödeme Planı
+                </h4>
+                {(kayit.payments || []).length === 0 ? (
+                  <p className="hy-empty">Ödeme kaydı yayınlanmamış.</p>
+                ) : (
+                  <table
+                    className="hy-table"
+                    style={{
+                      width: "100%",
+                      background: "#fff",
+                      borderCollapse: "collapse",
+                      borderRadius: 8,
+                      overflow: "hidden"
+                    }}
+                  >
+                    <thead>
+                      <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                        <th style={{ padding: 10 }}>Vade Tarihi</th>
+                        <th style={{ padding: 10 }}>Tutar</th>
+                        <th style={{ padding: 10 }}>Ödenen</th>
+                        <th style={{ padding: 10 }}>Ödeme Tarihi</th>
+                        <th style={{ padding: 10 }}>Durum</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(kayit.payments || []).map((p, i) => (
+                        <tr
+                          key={p.id || i}
+                          style={{ borderTop: "1px solid #eee" }}
+                        >
+                          <td style={{ padding: 10 }}>{fmtDate(p.dueDate)}</td>
+                          <td style={{ padding: 10 }}>{fmtMoney(p.amount)}</td>
+                          <td style={{ padding: 10 }}>
+                            {p.paidAmount ? fmtMoney(p.paidAmount) : "—"}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            {p.paidDate ? fmtDate(p.paidDate) : "—"}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            <StatusPill status={paymentStatus(p)} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             ))
           )}
-          <h3 className="hy-h3" style={{ marginTop: 20 }}>
-            Ödeme Planı ve Durumunuz
-          </h3>
-          <table
-            className="hy-table"
-            style={{
-              width: "100%",
-              background: "#fff",
-              borderCollapse: "collapse",
-              borderRadius: 8,
-              overflow: "hidden"
-            }}
-          >
-            <thead>
-              <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
-                <th style={{ padding: 10 }}>Vade Tarihi</th>
-                <th style={{ padding: 10 }}>Tutar</th>
-                <th style={{ padding: 10 }}>Ödenen</th>
-                <th style={{ padding: 10 }}>Durum</th>
-              </tr>
-            </thead>
-            <tbody>
-              {myPayments.map((p) => (
-                <tr key={p.id} style={{ borderTop: "1px solid #eee" }}>
-                  <td style={{ padding: 10 }}>{fmtDate(p.dueDate)}</td>
-                  <td style={{ padding: 10 }}>{fmtMoney(p.amount)}</td>
-                  <td style={{ padding: 10 }}>
-                    {p.paidAmount ? fmtMoney(p.paidAmount) : "—"}
-                  </td>
-                  <td style={{ padding: 10 }}>
-                    <StatusPill status={paymentStatus(p)} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+          <div className="hy-panel" style={{ marginTop: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap"
+              }}
+            >
+              <div>
+                <h3 className="hy-h3" style={{ margin: 0 }}>Bildirimler</h3>
+                <p className="muted small" style={{ margin: "4px 0 0" }}>
+                  Size gönderilen kira hatırlatmaları
+                  {kiraciBildirimleri.length > 0
+                    ? ` · ${kiraciBildirimleri.length} kayıt`
+                    : ""}
+                </p>
+              </div>
+              <button
+                className="hy-btn ghost sm"
+                onClick={kiraciBildirimleriniYukle}
+              >
+                <RefreshCw size={16} /> Yenile
+              </button>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {kiraciBildirimleri.length === 0 ? (
+                <p className="hy-empty">
+                  Henüz size gönderilmiş bir bildirim yok. Vade yaklaştığında
+                  hatırlatma burada listelenir.
+                </p>
+              ) : (
+                <table
+                  className="hy-table"
+                  style={{
+                    width: "100%",
+                    background: "#fff",
+                    borderCollapse: "collapse",
+                    borderRadius: 8,
+                    overflow: "hidden"
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                      <th style={{ padding: 10 }}>Tarih</th>
+                      <th style={{ padding: 10 }}>Konu</th>
+                      <th style={{ padding: 10 }}>Kanal</th>
+                      <th style={{ padding: 10 }}>Durum</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kiraciBildirimleri.map((k) => {
+                      const vade = odemeVadeleri[k.payment_id];
+                      const gonderildi = k.durum === "gonderildi";
+                      return (
+                        <tr
+                          key={k.id}
+                          style={{ borderTop: "1px solid #eee" }}
+                        >
+                          <td style={{ padding: 10 }}>
+                            {fmtDateTime(k.created_at || k.gonderim_gun)}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            {k.tur === "gecikme"
+                              ? "Gecikme bildirimi"
+                              : "Kira hatırlatması"}
+                            {vade ? (
+                              <span className="muted small">
+                                {" "}
+                                · Vade {fmtDate(vade)}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            {k.kanal === "whatsapp" ? "WhatsApp" : "E-posta"}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "3px 8px",
+                                borderRadius: 999,
+                                fontSize: "12px",
+                                fontWeight: 600,
+                                background: gonderildi ? "#D1FAE5" : "#FEE2E2",
+                                color: gonderildi ? "#065F46" : "#991B1B"
+                              }}
+                            >
+                              {gonderildi ? "Gönderildi" : "Gönderilemedi"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1573,7 +2562,7 @@ export default function App() {
                 <input
                   value={d.ad}
                   onChange={(e) => set({ ad: e.target.value })}
-                  placeholder="Örn: Sima Garden Daire 12"
+                  placeholder="Örn: Ataşehir Konut Daire 12"
                 />
               </Field>
             </div>
@@ -1948,10 +2937,8 @@ export default function App() {
                 · Mülk Sahibi
               </span>
             </div>
-            <button
-              className="hy-btn ghost sm"
-              onClick={() => setAuthRole(null)}
-            >
+            <CloudBadge state={cloudState} detail={cloudDetail} />
+            <button className="hy-btn ghost sm" onClick={handleLogout}>
               Çıkış Yap
             </button>
           </div>
@@ -4010,6 +4997,144 @@ export default function App() {
               <p>
                 <strong>Adres:</strong> {tenant.address || "—"}
               </p>
+
+              <h3 style={{ marginTop: 24 }}>Kiracı Girişi</h3>
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Kiracı, kendi hesabıyla giriş yaptığında yalnızca burada
+                yayınladığınız sözleşme ve ödeme kayıtlarını görür. Kiracının
+                hesap e-postası aşağıdaki adresle aynı olmalıdır.
+              </p>
+              <div
+                className="hy-form-grid"
+                style={{ maxWidth: 520, alignItems: "end" }}
+              >
+                <Field label="Kiracı E-Posta">
+                  <input
+                    type="email"
+                    placeholder="kiraci@ornek.com"
+                    value={tenantEmailDraft}
+                    onChange={(e) => setTenantEmailDraft(e.target.value)}
+                  />
+                </Field>
+                <Field label="&nbsp;">
+                  <button
+                    className="hy-btn primary"
+                    onClick={() => publishTenantAccess(tenant, tenantEmailDraft)}
+                  >
+                    <Send size={16} /> Kiracı Girişine Aç
+                  </button>
+                </Field>
+              </div>
+              {tenant.tenantShare?.publishedAt && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "center",
+                    flexWrap: "wrap"
+                  }}
+                >
+                  <span className="hy-pill-badge good">Yayında</span>
+                  <span className="muted small">
+                    Son güncelleme: {fmtDate(tenant.tenantShare.publishedAt)} ·{" "}
+                    {tenant.tenantShare.email}
+                  </span>
+                  <button
+                    className="hy-btn ghost sm"
+                    onClick={() => unpublishTenantAccess(tenant)}
+                  >
+                    Kiracı Girişini Kapat
+                  </button>
+                </div>
+              )}
+              <p className="muted small" style={{ marginTop: 10 }}>
+                Yayın açıkken kiracının kaydı, sözleşme veya ödeme
+                bilgilerindeki her değişiklikte kendiliğinden güncellenir.
+              </p>
+
+              <h3 style={{ marginTop: 24 }}>Bildirim Ayarları (bu kiracı)</h3>
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Boş bırakılan alanlar Ayarlar'daki genel bildirim ayarını
+                kullanır. Kaydettiğinizde, yayın açıksa sunucudaki kiracı kaydı da
+                kendiliğinden güncellenir.
+              </p>
+              <div className="hy-form-grid" style={{ maxWidth: 640 }}>
+                <Field label="Hatırlatma (gün önce)">
+                  <input
+                    type="number"
+                    min="0"
+                    max="30"
+                    placeholder={String(bildirimAyarlari.hatirlatmaGun)}
+                    value={
+                      tenantBildirimDraft.hatirlatmaGun === undefined
+                        ? ""
+                        : tenantBildirimDraft.hatirlatmaGun
+                    }
+                    onChange={(e) =>
+                      tenantBildirimGuncelle("hatirlatmaGun", e.target.value)
+                    }
+                  />
+                </Field>
+                <Field label="Gönderim saati (Türkiye)">
+                  <input
+                    type="time"
+                    value={tenantBildirimDraft.gonderimSaati || ""}
+                    onChange={(e) =>
+                      tenantBildirimGuncelle("gonderimSaati", e.target.value)
+                    }
+                  />
+                </Field>
+                <UcDurum
+                  label="E-posta kanalı"
+                  value={tenantBildirimDraft.eposta}
+                  onChange={(v) => tenantBildirimGuncelle("eposta", v)}
+                />
+                <UcDurum
+                  label="WhatsApp kanalı"
+                  value={tenantBildirimDraft.whatsapp}
+                  onChange={(v) => tenantBildirimGuncelle("whatsapp", v)}
+                />
+                <UcDurum
+                  label="Kiracıya hatırlatma"
+                  value={tenantBildirimDraft.kiracilaraGonder}
+                  onChange={(v) => tenantBildirimGuncelle("kiracilaraGonder", v)}
+                  acik="Gönderilsin"
+                  kapali="Gönderilmesin"
+                />
+                <UcDurum
+                  label="Malike gecikme bildirimi"
+                  value={tenantBildirimDraft.malikeGonder}
+                  onChange={(v) => tenantBildirimGuncelle("malikeGonder", v)}
+                  acik="Gönderilsin"
+                  kapali="Gönderilmesin"
+                />
+              </div>
+              <p className="muted small" style={{ marginTop: 10 }}>
+                {bildirimOzeti(tenant, tenantBildirimDraft, bildirimAyarlari)}
+              </p>
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                <button
+                  className="hy-btn primary"
+                  onClick={() => {
+                    savePerson({ ...tenant, bildirim: tenantBildirimDraft });
+                    alert(
+                      "Bu kiracının bildirim ayarları kaydedildi." +
+                        (tenant.tenantShare
+                          ? " Yayın birkaç saniye içinde kendiliğinden güncellenir."
+                          : "")
+                    );
+                  }}
+                >
+                  <Check size={16} /> Bu Kiracıyı Kaydet
+                </button>
+                <button
+                  className="hy-btn ghost"
+                  onClick={() => setTenantBildirimDraft({})}
+                >
+                  Genel Ayarlara Dön
+                </button>
+              </div>
             </div>
           )}
         </>
@@ -4024,6 +5149,15 @@ export default function App() {
             <h1 className="hy-page-title">Kiracılarım</h1>
             <p className="hy-page-sub">{tenants.length} kayıtlı kiracı</p>
           </div>
+          <button
+            className="hy-btn ghost"
+            onClick={() => {
+              setTopluDraft({ ...BOS_TOPLU });
+              setTopluModal(true);
+            }}
+          >
+            <Users size={16} /> Toplu Bildirim Ayarları
+          </button>
         </div>
 
         <div
@@ -4220,6 +5354,196 @@ export default function App() {
     );
   }
 
+  function renderTopluBildirimModal() {
+    if (!topluModal) return null;
+    const kiracilar = people.filter((p) => p.role === "Kiracı");
+    const secili = topluDraft.secilenler.length;
+    const guncelle = (yama) => setTopluDraft({ ...topluDraft, ...yama });
+
+    return (
+      <Modal
+        title="Toplu Bildirim Ayarları"
+        onClose={() => setTopluModal(false)}
+        wide
+      >
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Seçtiğiniz kiracılara aynı ayarları tek seferde uygular. "Değiştirme"
+          bıraktığınız alanlar mevcut değerinde kalır; "Genel ayarı kullan"
+          seçerseniz o kiracıdaki özel ayar silinip Ayarlar'daki genel değere
+          döner.
+        </p>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            marginBottom: 8
+          }}
+        >
+          <strong style={{ fontSize: "13.5px" }}>
+            Kiracılar ({secili}/{kiracilar.length} seçili)
+          </strong>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="hy-btn ghost sm"
+              onClick={() =>
+                guncelle({ secilenler: kiracilar.map((k) => k.id) })
+              }
+            >
+              Tümünü Seç
+            </button>
+            <button
+              className="hy-btn ghost sm"
+              onClick={() => guncelle({ secilenler: [] })}
+            >
+              Seçimi Temizle
+            </button>
+          </div>
+        </div>
+
+        {kiracilar.length === 0 ? (
+          <p className="hy-empty">Kayıtlı kiracı yok.</p>
+        ) : (
+          <div
+            style={{
+              maxHeight: 220,
+              overflowY: "auto",
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              padding: 6
+            }}
+          >
+            {kiracilar.map((k) => (
+              <label
+                key={k.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "7px 8px",
+                  fontSize: "13px",
+                  borderBottom: "1px solid #f3f4f6"
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={topluDraft.secilenler.includes(k.id)}
+                  onChange={(e) =>
+                    guncelle({
+                      secilenler: e.target.checked
+                        ? [...topluDraft.secilenler, k.id]
+                        : topluDraft.secilenler.filter((id) => id !== k.id)
+                    })
+                  }
+                />
+                <span style={{ fontWeight: 600 }}>{k.name}</span>
+                <span className="muted small">{k.email || "e-posta yok"}</span>
+                {k.tenantShare?.email && (
+                  <span className="hy-pill-badge good">Yayında</span>
+                )}
+              </label>
+            ))}
+          </div>
+        )}
+
+        <h4 style={{ margin: "18px 0 10px", fontSize: "13.5px" }}>
+          Uygulanacak ayarlar
+        </h4>
+        <div className="hy-form-grid">
+          <Field label="Hatırlatma (gün önce)">
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                value={topluDraft.gunMod}
+                onChange={(e) => guncelle({ gunMod: e.target.value })}
+                style={{ flex: 1 }}
+              >
+                <option value="degistirme">Değiştirme</option>
+                <option value="genel">Genel ayarı kullan</option>
+                <option value="deger">Şu değeri ata</option>
+              </select>
+              {topluDraft.gunMod === "deger" && (
+                <input
+                  type="number"
+                  min="0"
+                  max="30"
+                  style={{ maxWidth: 90 }}
+                  value={topluDraft.gun}
+                  onChange={(e) => guncelle({ gun: e.target.value })}
+                />
+              )}
+            </div>
+          </Field>
+          <Field label="Gönderim saati (Türkiye)">
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                value={topluDraft.saatMod}
+                onChange={(e) => guncelle({ saatMod: e.target.value })}
+                style={{ flex: 1 }}
+              >
+                <option value="degistirme">Değiştirme</option>
+                <option value="genel">Genel ayarı kullan</option>
+                <option value="deger">Şu değeri ata</option>
+              </select>
+              {topluDraft.saatMod === "deger" && (
+                <input
+                  type="time"
+                  style={{ maxWidth: 130 }}
+                  value={topluDraft.saat}
+                  onChange={(e) => guncelle({ saat: e.target.value })}
+                />
+              )}
+            </div>
+          </Field>
+          <TopluSecim
+            label="E-posta kanalı"
+            value={topluDraft.eposta}
+            onChange={(v) => guncelle({ eposta: v })}
+          />
+          <TopluSecim
+            label="WhatsApp kanalı"
+            value={topluDraft.whatsapp}
+            onChange={(v) => guncelle({ whatsapp: v })}
+          />
+          <TopluSecim
+            label="Kiracıya hatırlatma"
+            value={topluDraft.kiracilaraGonder}
+            onChange={(v) => guncelle({ kiracilaraGonder: v })}
+            acik="Gönderilsin"
+            kapali="Gönderilmesin"
+          />
+          <TopluSecim
+            label="Malike gecikme bildirimi"
+            value={topluDraft.malikeGonder}
+            onChange={(v) => guncelle({ malikeGonder: v })}
+            acik="Gönderilsin"
+            kapali="Gönderilmesin"
+          />
+        </div>
+
+        <div className="hy-modal-footer">
+          <button
+            className="hy-btn ghost"
+            onClick={() => setTopluDraft({ ...BOS_TOPLU })}
+          >
+            Sıfırla
+          </button>
+          <button
+            className="hy-btn ghost"
+            onClick={() => setTopluModal(false)}
+          >
+            Kapat
+          </button>
+          <button className="hy-btn primary" onClick={topluBildirimUygula}>
+            <Check size={16} /> {secili} Kiracıya Uygula
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   function renderKontratKayitTab() {
     const filteredQueue = pdfQueue.filter(item => {
       if (filter === "islenen") return item.status === "İşleniyor" || item.status === "Bekliyor";
@@ -4269,7 +5593,7 @@ export default function App() {
                 <input
                   value={contractScanForm.tenantName}
                   onChange={(e) => setContractScanForm({ ...contractScanForm, tenantName: e.target.value })}
-                  placeholder="ADAM KHODR"
+                  placeholder="Örn: Ahmet Yılmaz"
                 />
               </Field>
               <Field label="Kiracı Telefon">
@@ -5230,6 +6554,9 @@ export default function App() {
 
         <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
           <h3 style={{ marginTop: 0 }}>Bağlı Banka Hesapları</h3>
+          {bankIntegrations.length === 0 && (
+            <div className="hy-empty">Henüz bağlı banka hesabı yok.</div>
+          )}
           {bankIntegrations.map((b) => (
             <div
               key={b.id}
@@ -5301,6 +6628,13 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
+              {bankStatements.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="hy-empty">
+                    Henüz banka hareketi yok.
+                  </td>
+                </tr>
+              )}
               {bankStatements.map((st) => (
                 <tr key={st.id} style={{ borderBottom: "1px solid #eee" }}>
                   <td style={{ padding: 10 }}>{fmtDate(st.date)}</td>
@@ -5331,7 +6665,31 @@ export default function App() {
         </div>
 
         <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
-          <h3 style={{ marginTop: 0 }}>Profil Bilgileri</h3>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap"
+            }}
+          >
+            <h3 style={{ margin: 0 }}>Hesap</h3>
+            <CloudBadge state={cloudState} detail={cloudDetail} />
+          </div>
+          <p className="muted small" style={{ margin: "10px 0 4px" }}>
+            Giriş yapılan hesap: <strong>{accountEmail || "—"}</strong> · Rol:{
+            " "}
+            <strong>
+              {accountRole === "tenant" ? "Kiracı" : "Malik / Yönetici"}
+            </strong>
+          </p>
+          <p className="muted small" style={{ margin: "0 0 12px" }}>
+            E-posta ve şifre Supabase Auth tarafından yönetilir; uygulama şifreyi
+            hiçbir yerde saklamaz. Aşağıdaki isim alanları yalnızca görünüm
+            içindir.
+          </p>
+
           <div className="hy-form-grid" style={{ maxWidth: 500 }}>
             <Field label="Ad">
               <input
@@ -5349,24 +6707,38 @@ export default function App() {
                 }
               />
             </Field>
-            <Field label="E-Posta">
-              <input
-                value={profile.email}
-                onChange={(e) =>
-                  setProfile({ ...profile, email: e.target.value })
-                }
-              />
-            </Field>
-            <Field label="Giriş Şifresi / PIN">
+            <Field label="Yeni Şifre">
               <input
                 type="password"
-                value={profile.adminPin}
-                onChange={(e) =>
-                  setProfile({ ...profile, adminPin: e.target.value })
-                }
+                placeholder="En az 6 karakter"
+                value={yeniSifre}
+                onChange={(e) => setYeniSifre(e.target.value)}
               />
             </Field>
+            <Field label="&nbsp;">
+              <button
+                className="hy-btn ghost"
+                disabled={authBusy}
+                onClick={handlePasswordChange}
+              >
+                Şifreyi Değiştir
+              </button>
+            </Field>
           </div>
+
+          {profilMesaji && (
+            <p
+              style={{
+                marginTop: 12,
+                fontSize: "12.5px",
+                color: profilMesaji.includes("güncellendi")
+                  ? "#065F46"
+                  : "#991B1B"
+              }}
+            >
+              {profilMesaji}
+            </p>
+          )}
 
           <h3 style={{ marginTop: 24 }}>Arayüz Şeffaflığı (Opacity)</h3>
           <input
@@ -5393,35 +6765,285 @@ export default function App() {
           </div>
         </div>
 
+        <div className="hy-panel" style={{ padding: 24, marginBottom: 20 }}>
+          <h3 style={{ marginTop: 0 }}>Bildirimler (E-posta & WhatsApp)</h3>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Vadesi yaklaşan ödemeler kiracıya, gecikmiş ödemeler size bildirilir.
+            Gönderim sunucuda her saat kontrol edilir ve saat gelince yapılır
+            (Türkiye saati); uygulama kapalı olsa da devam eder. Buradaki ayarlar
+            varsayılandır — her kiracı için Kiracılarım ekranından ayrı saat,
+            kanal ve hatırlatma günü tanımlayabilirsiniz.
+          </p>
+
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", margin: "4px 0 14px" }}>
+            {[
+              ["aktif", "Bildirimler açık"],
+              ["kiracilaraGonder", "Kiracıya hatırlatma"],
+              ["malikeGonder", "Malike gecikme bildirimi"]
+            ].map(([k, l]) => (
+              <label
+                key={k}
+                style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "13.5px" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={bildirimAyarlari[k] === true}
+                  onChange={(e) =>
+                    setBildirimAyarlari({
+                      ...bildirimAyarlari,
+                      [k]: e.target.checked
+                    })
+                  }
+                />
+                {l}
+              </label>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 14 }}>
+            {[
+              ["eposta", "Kanal: E-posta"],
+              ["whatsapp", "Kanal: WhatsApp"]
+            ].map(([k, l]) => (
+              <label
+                key={k}
+                style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "13.5px" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={bildirimAyarlari.kanallar?.[k] === true}
+                  onChange={(e) =>
+                    setBildirimAyarlari({
+                      ...bildirimAyarlari,
+                      kanallar: {
+                        ...bildirimAyarlari.kanallar,
+                        [k]: e.target.checked
+                      }
+                    })
+                  }
+                />
+                {l}
+              </label>
+            ))}
+          </div>
+
+          <div className="hy-form-grid" style={{ maxWidth: 720 }}>
+            <Field label="Kaç gün önce hatırlatılsın?">
+              <input
+                type="number"
+                min="0"
+                max="30"
+                value={bildirimAyarlari.hatirlatmaGun}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    hatirlatmaGun: Number(e.target.value)
+                  })
+                }
+              />
+            </Field>
+            <Field label="Malik bildirim e-postası">
+              <input
+                type="email"
+                placeholder={accountEmail || "ornek@domain.com"}
+                value={bildirimAyarlari.malikEposta}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    malikEposta: e.target.value
+                  })
+                }
+              />
+            </Field>
+            <Field label="Malik WhatsApp numarası">
+              <input
+                placeholder="0532 000 00 00"
+                value={bildirimAyarlari.malikTelefon}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    malikTelefon: e.target.value
+                  })
+                }
+              />
+            </Field>
+            <Field label="Varsayılan gönderim saati">
+              <input
+                type="time"
+                value={bildirimAyarlari.gonderimSaati || "09:00"}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    gonderimSaati: e.target.value
+                  })
+                }
+              />
+            </Field>
+            <Field label="WhatsApp şablonu (vade)">
+              <input
+                value={bildirimAyarlari.sablonVade}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    sablonVade: e.target.value
+                  })
+                }
+              />
+            </Field>
+            <Field label="WhatsApp şablonu (gecikme)">
+              <input
+                value={bildirimAyarlari.sablonGecikme}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    sablonGecikme: e.target.value
+                  })
+                }
+              />
+            </Field>
+            <Field label="WhatsApp dil kodu">
+              <input
+                value={bildirimAyarlari.waDilKodu}
+                onChange={(e) =>
+                  setBildirimAyarlari({
+                    ...bildirimAyarlari,
+                    waDilKodu: e.target.value
+                  })
+                }
+              />
+            </Field>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+            <button
+              className="hy-btn primary"
+              onClick={() => {
+                saveBildirimAyarlari(bildirimAyarlari);
+                setBildirimMesaji("Bildirim ayarları kaydedildi.");
+              }}
+            >
+              <Check size={16} /> Ayarları Kaydet
+            </button>
+            <button
+              className="hy-btn ghost"
+              disabled={bildirimCalisiyor}
+              onClick={bildirimleriSimdiCalistir}
+            >
+              <Send size={16} />{" "}
+              {bildirimCalisiyor ? "Gönderiliyor…" : "Şimdi Çalıştır (test)"}
+            </button>
+            <button className="hy-btn ghost" onClick={bildirimKayitlariniYukle}>
+              Kayıtları Yenile
+            </button>
+          </div>
+
+          {bildirimMesaji && (
+            <p style={{ marginTop: 12, fontSize: "12.5px", color: "#374151" }}>
+              {bildirimMesaji}
+            </p>
+          )}
+
+          <div
+            style={{
+              marginTop: 18,
+              background: "#F9FAFB",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              padding: 14,
+              fontSize: "12.5px",
+              color: "#374151",
+              lineHeight: 1.7
+            }}
+          >
+            <strong>Kurulum notları</strong>
+            <br />· Supabase gizli değişkenleri: <code>RESEND_API_KEY</code>,{" "}
+            <code>BILDIRIM_GONDEREN</code>, <code>WHATSAPP_TOKEN</code>,{" "}
+            <code>WHATSAPP_PHONE_ID</code>, <code>CRON_SECRET</code>{" "}
+            (anahtarlar yalnızca sunucuda tutulur).
+            <br />· WhatsApp mesajları <strong>onaylı şablon</strong> ile gider;
+            vade şablonu 3 değişken alır: ad, tutar, vade tarihi. Gecikme şablonu:
+            kiracı adı, tutar, gecikme günü.
+            <br />· Fonksiyonu yayınlayın:{" "}
+            <code>supabase functions deploy gunluk-bildirim</code> · Günlük
+            zamanlayıcı: <code>supabase/bildirimler.sql</code> içindeki cron bloğu.
+          </div>
+
+          <h4 style={{ marginTop: 20, marginBottom: 8, fontSize: "13.5px" }}>
+            Son Bildirimler
+          </h4>
+          {bildirimKayitlari.length === 0 ? (
+            <p className="hy-empty">Henüz bildirim kaydı yok.</p>
+          ) : (
+            <table
+              className="hy-table"
+              style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}
+            >
+              <thead>
+                <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
+                  <th style={{ padding: 8 }}>Tarih</th>
+                  <th style={{ padding: 8 }}>Tür</th>
+                  <th style={{ padding: 8 }}>Kanal</th>
+                  <th style={{ padding: 8 }}>Alıcı</th>
+                  <th style={{ padding: 8 }}>Durum</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bildirimKayitlari.slice(0, 20).map((k) => (
+                  <tr key={k.id} style={{ borderTop: "1px solid #eee" }}>
+                    <td style={{ padding: 8 }}>{fmtDate(k.gonderim_gun)}</td>
+                    <td style={{ padding: 8 }}>
+                      {k.tur === "vade" ? "Vade hatırlatma" : "Gecikme"}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {k.kanal === "eposta" ? "E-posta" : "WhatsApp"}
+                    </td>
+                    <td style={{ padding: 8 }}>{k.alici || "—"}</td>
+                    <td style={{ padding: 8 }}>
+                      <StatusPill
+                        status={k.durum === "gonderildi" ? "Tamamlandı" : "Hata"}
+                      />
+                      {k.hata && (
+                        <span className="muted small" title={k.hata}>{" "}
+                          {String(k.hata).slice(0, 40)}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
         <div className="hy-panel" style={{ padding: 24, border: "1px solid #FCA5A5", background: "#FEF2F2" }}>
           <h3 style={{ marginTop: 0, color: "#991B1B" }}>Sistem Sıfırlama (Reset)</h3>
           <p style={{ fontSize: "13.5px", color: "#7F1D1D", marginBottom: 16 }}>
-            Tüm mülkleri, kiracıları, sözleşmeleri, ödemeleri, senetleri ve ayarları varsayılan başlangıç değerlerine geri döndürür. Bu işlem geri alınamaz!
+            Tüm mülkleri, kiracıları, sözleşmeleri, kira ödemelerini, senetleri, giderleri, bakım kayıtlarını ve belgeleri siler. Bu işlem geri alınamaz!
           </p>
           <button
             className="hy-btn danger"
             onClick={async () => {
-              if (confirm("Tüm verileri varsayılan ayarlara sıfırlamak istediğinizden emin misiniz? Bu işlem geri alınamaz!")) {
+              if (confirm("Tüm kayıtları silmek istediğinizden emin misiniz? Bu işlem geri alınamaz!")) {
                 try {
-                  await window.storage.set(STORAGE_KEYS.properties, JSON.stringify(DEFAULT_PROPERTIES));
-                  await window.storage.set(STORAGE_KEYS.people, JSON.stringify(DEFAULT_PEOPLE));
-                  await window.storage.set(STORAGE_KEYS.contracts, JSON.stringify(DEFAULT_CONTRACTS));
-                  await window.storage.set(STORAGE_KEYS.payments, JSON.stringify(DEFAULT_PAYMENTS));
-                  await window.storage.set(STORAGE_KEYS.promissoryNotes, JSON.stringify(DEFAULT_NOTES));
+                  await window.storage.set(STORAGE_KEYS.properties, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.people, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.contracts, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.payments, JSON.stringify([]));
+                  await window.storage.set(STORAGE_KEYS.promissoryNotes, JSON.stringify([]));
                   await window.storage.set(STORAGE_KEYS.expenses, JSON.stringify([]));
                   await window.storage.set(STORAGE_KEYS.maintenance, JSON.stringify([]));
                   await window.storage.set(STORAGE_KEYS.documents, JSON.stringify([]));
                   
-                  setProperties(DEFAULT_PROPERTIES);
-                  setPeople(DEFAULT_PEOPLE);
-                  setContracts(DEFAULT_CONTRACTS);
-                  setPayments(DEFAULT_PAYMENTS);
-                  setPromissoryNotes(DEFAULT_NOTES);
+                  setProperties([]);
+                  setPeople([]);
+                  setContracts([]);
+                  setPayments([]);
+                  setPromissoryNotes([]);
                   setExpenses([]);
                   setMaintenance([]);
                   setDocuments([]);
                   
-                  alert("Sistem verileri başarıyla varsayılan ayarlara sıfırlandı!");
+                  alert("Tüm kayıtlar silindi. Uygulama boş bir portföyle devam ediyor.");
                 } catch (err) {
                   console.error(err);
                   alert("Sıfırlama sırasında bir hata oluştu.");
@@ -5432,6 +7054,261 @@ export default function App() {
             <RefreshCw size={16} /> Tüm Verileri ve Ayarları Sıfırla (Reset)
           </button>
         </div>
+      </>
+    );
+  }
+
+  // Bildirim doğrulama ekranı: her kiracının geçerli ayarı ve son gönderimi.
+  function renderBildirimlerTab() {
+    const kiracilar = people.filter((p) => p.role === "Kiracı");
+    const yayinda = kiracilar.filter((k) => k.tenantShare?.email);
+    const bugun = todayStr();
+    const bugunKayitlar = bildirimKayitlari.filter(
+      (k) => String(k.gonderim_gun || "").slice(0, 10) === bugun
+    );
+    const bugunGonderilen = bugunKayitlar.filter(
+      (k) => k.durum === "gonderildi"
+    ).length;
+    const bugunHata = bugunKayitlar.length - bugunGonderilen;
+
+    const sonBildirim = (tenant) => {
+      const eposta = (tenant.tenantShare?.email || tenant.email || "").toLowerCase();
+      if (!eposta) return null;
+      return (
+        bildirimKayitlari.find(
+          (k) =>
+            String(k.alici || "").toLowerCase() === eposta ||
+            String(k.tenant_email || "").toLowerCase() === eposta
+        ) || null
+      );
+    };
+
+    const kartlar = [
+      {
+        baslik: "Yayındaki kiracı",
+        deger: `${yayinda.length} / ${kiracilar.length}`,
+        renk: yayinda.length > 0 ? "#065F46" : "#6B7280"
+      },
+      { baslik: "Bugün gönderilen", deger: String(bugunGonderilen), renk: "#065F46" },
+      {
+        baslik: "Bugün hata",
+        deger: String(bugunHata),
+        renk: bugunHata > 0 ? "#991B1B" : "#6B7280"
+      },
+      {
+        baslik: "Bildirimler",
+        deger: bildirimAyarlari.aktif ? "Açık" : "Kapalı",
+        renk: bildirimAyarlari.aktif ? "#065F46" : "#991B1B"
+      }
+    ];
+
+    return (
+      <>
+        <div className="hy-topbar">
+          <div>
+            <h1 className="hy-page-title">Bildirim Doğrulama</h1>
+            <p className="hy-page-sub">
+              Her kiracı için geçerli saat, kanallar ve son gönderim durumu
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button className="hy-btn ghost" onClick={bildirimKayitlariniYukle}>
+              <RefreshCw size={16} /> Yenile
+            </button>
+            <button
+              className="hy-btn ghost"
+              onClick={() => {
+                setTopluDraft({ ...BOS_TOPLU });
+                setTopluModal(true);
+              }}
+            >
+              <Users size={16} /> Toplu Düzenle
+            </button>
+            <button
+              className="hy-btn primary"
+              disabled={bildirimCalisiyor}
+              onClick={bildirimleriSimdiCalistir}
+            >
+              <Send size={16} />{" "}
+              {bildirimCalisiyor ? "Gönderiliyor…" : "Şimdi Çalıştır"}
+            </button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+            gap: 16,
+            marginBottom: 20
+          }}
+        >
+          {kartlar.map((k) => (
+            <div key={k.baslik} className="hy-panel" style={{ padding: 18 }}>
+              <div className="muted small">{k.baslik}</div>
+              <div
+                style={{
+                  fontSize: "22px",
+                  fontWeight: 700,
+                  color: k.renk,
+                  marginTop: 6
+                }}
+              >
+                {k.deger}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {bildirimMesaji && (
+          <p
+            style={{
+              fontSize: "12.5px",
+              color: "#374151",
+              background: "#F9FAFB",
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              padding: "10px 12px"
+            }}
+          >
+            {bildirimMesaji}
+          </p>
+        )}
+
+        {kiracilar.length === 0 ? (
+          <p className="hy-empty">Kayıtlı kiracı yok.</p>
+        ) : (
+          <div className="hy-panel" style={{ padding: 0, overflow: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                textAlign: "left",
+                fontSize: "13px"
+              }}
+            >
+              <thead>
+                <tr style={{ background: "#f8f9fa" }}>
+                  <th style={{ padding: 12 }}>Kiracı</th>
+                  <th style={{ padding: 12 }}>Yayın</th>
+                  <th style={{ padding: 12 }}>Geçerli Ayar</th>
+                  <th style={{ padding: 12 }}>Kanallar</th>
+                  <th style={{ padding: 12 }}>Bekleyen Bildirim</th>
+                  <th style={{ padding: 12 }}>Son Gönderim</th>
+                  <th style={{ padding: 12 }}>İşlem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {kiracilar.map((k) => {
+                  const e = etkinBildirimAyarlari(k, bildirimAyarlari);
+                  const durum = kiracininBildirimDurumu(
+                    k,
+                    contracts,
+                    payments,
+                    e
+                  );
+                  const son = sonBildirim(k);
+                  return (
+                    <tr key={k.id} style={{ borderTop: "1px solid #eee" }}>
+                      <td style={{ padding: 12 }}>
+                        <div style={{ fontWeight: 600 }}>{k.name}</div>
+                        <div className="muted small">
+                          {k.tenantShare?.email || k.email || "e-posta yok"}
+                        </div>
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        {k.tenantShare?.email ? (
+                          <span className="hy-pill-badge good">Yayında</span>
+                        ) : (
+                          <span className="hy-pill-badge neutral">Kapalı</span>
+                        )}
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        <div>
+                          {e.gun} gün önce{" "}
+                          {e.kaynak.gun === "özel" && (
+                            <span className="muted small">(özel)</span>
+                          )}
+                        </div>
+                        <div className="muted small">
+                          saat {e.saat}
+                          {e.kaynak.saat === "özel" ? " (özel)" : " (genel)"}
+                        </div>
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span
+                            className={
+                              "hy-pill-badge " + (e.eposta ? "good" : "neutral")
+                            }
+                          >
+                            E-posta
+                          </span>
+                          <span
+                            className={
+                              "hy-pill-badge " + (e.whatsapp ? "good" : "neutral")
+                            }
+                          >
+                            WhatsApp
+                          </span>
+                        </div>
+                        <div className="muted small" style={{ marginTop: 4 }}>
+                          {e.kiracilara && e.malike
+                            ? "Kiracı + malik"
+                            : e.kiracilara
+                            ? "Yalnızca kiracı"
+                            : e.malike
+                            ? "Yalnızca malik"
+                            : "Kimseye gönderilmiyor"}
+                        </div>
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        <span
+                          className={
+                            "hy-pill-badge " +
+                            (durum.tur === "gecikme"
+                              ? "bad"
+                              : durum.tur === "vade"
+                              ? "warn"
+                              : "neutral")
+                          }
+                        >
+                          {durum.metin}
+                        </span>
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        {son ? (
+                          <div>
+                            <div>{fmtDate(son.gonderim_gun)}</div>
+                            <div className="muted small">
+                              {son.tur === "vade" ? "Vade hatırlatma" : "Gecikme"} ·{" "}
+                              {son.kanal === "eposta" ? "E-posta" : "WhatsApp"} ·{" "}
+                              {son.durum === "gonderildi" ? "gönderildi" : "hata"}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="muted small">Kayıt yok</span>
+                        )}
+                      </td>
+                      <td style={{ padding: 12 }}>
+                        <button
+                          className="hy-btn ghost sm"
+                          onClick={() => {
+                            setTab("kiracilar");
+                            setTenantDetailTab("bilgiler");
+                            setSelectedTenantId(k.id);
+                          }}
+                        >
+                          Düzenle
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </>
     );
   }
@@ -5518,6 +7395,7 @@ export default function App() {
         {tab === "kontrat_kayit" && renderKontratKayitTab()}
         {tab === "senetler" && renderSenetlerTab()}
         {tab === "kiracilar" && renderTenantsList()}
+        {tab === "bildirimler" && renderBildirimlerTab()}
         {tab === "muhasebe_entegrasyonu" && renderMuhasebeEntegrasyonuTab()}
         {tab === "bakim" && renderBakimTab()}
         {tab === "muhasebe" && renderOdemelerMuhasebeTab()}
@@ -5525,6 +7403,8 @@ export default function App() {
         {tab === "ayarlar" && renderAyarlarTab()}
         {tab === "menu" && renderMenuTab()}
       </main>
+
+      {renderTopluBildirimModal()}
 
       <style>{`
         :root {
