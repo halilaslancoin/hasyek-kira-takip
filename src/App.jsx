@@ -71,12 +71,95 @@ const reportCloud = (state, detail) => {
   }
 };
 
+/* --- Yerel depolama güvenliği --------------------------------------------
+   Tarayıcının localStorage alanı ~5 MB ile sınırlıdır. Alan dolduğunda
+   setItem "QuotaExceededError" fırlatır. Bu hata buluta kaydı ENGellememeli
+   (yoksa kullanıcı "kaydettim" sanır, sayfa yenilenince veri kaybolur) ve
+   sessizce yutulmamalıdır.                                                     */
+
+// Bundan büyük değerler yalnızca bulutta tutulur; yerel alanı tıkamaz.
+const YEREL_MAKS_KARAKTER = 150000;
+
+let depolamaListener = () => {};
+let depolamaKayipUyarildi = false;
+const onDepolamaDurumu = (fn) => {
+  depolamaListener = fn;
+};
+const reportDepolama = (durum, detay) => {
+  try {
+    depolamaListener(durum, detay || "");
+  } catch (e) {
+    /* dinleyici yoksa sessizce geç */
+  }
+};
+
+// Buluta gönderilememiş anahtarların listesi. Bulut kopyası eskimiş olacağı
+// için bu anahtarlarda yerel kopya tercih edilir; aksi hâlde kayıt kaybolur.
+const PENDING_SYNC_KEY = "hasyek:__bekleyen__";
+
+const bekleyenOku = () => {
+  try {
+    const l = JSON.parse(localStorage.getItem(PENDING_SYNC_KEY) || "[]");
+    return Array.isArray(l) ? l : [];
+  } catch (e) {
+    return [];
+  }
+};
+const bekleyenYaz = (liste) => {
+  try {
+    localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(liste));
+  } catch (e) {
+    /* liste yazılamazsa yalnızca tercih mantığı devre dışı kalır */
+  }
+};
+const bekleyenEkle = (key) => {
+  const liste = bekleyenOku();
+  if (!liste.includes(key)) bekleyenYaz([...liste, key]);
+};
+const bekleyenCikar = (key) => {
+  const liste = bekleyenOku();
+  if (liste.includes(key)) bekleyenYaz(liste.filter((k) => k !== key));
+};
+
+// Yerel anahtarı yazmayı dener ve asla hata fırlatmaz.
+// Kota doluysa eski (öneksiz) kopyaları temizleyip bir kez daha dener.
+function yerelYaz(anahtar, value) {
+  if (typeof value === "string" && value.length > YEREL_MAKS_KARAKTER) {
+    try {
+      localStorage.removeItem(anahtar);
+    } catch (e) {
+      /* yoksay */
+    }
+    return { tamam: false, neden: "buyuk" };
+  }
+  try {
+    localStorage.setItem(anahtar, value);
+    return { tamam: true };
+  } catch (e) {
+    try {
+      for (const k of Object.values(STORAGE_KEYS)) {
+        localStorage.removeItem(k);
+      }
+      localStorage.setItem(anahtar, value);
+      return { tamam: true, temizlendi: true };
+    } catch (e2) {
+      return { tamam: false, neden: "kota" };
+    }
+  }
+}
+
 // Yerel (önekli) kopyayı bulutla senkron tutan ince katman.
 if (typeof window !== "undefined") {
   window.storage = {
     async get(key) {
-      const yerel = localStorage.getItem(localKeyFor(key));
+      let yerel = null;
+      try {
+        yerel = localStorage.getItem(localKeyFor(key));
+      } catch (e) {
+        yerel = null;
+      }
       if (!sessionUserId) return { key, value: yerel, cloud: false };
+      const bekliyor = bekleyenOku().includes(key);
       try {
         const { data, error } = await supabase
           .from("user_data")
@@ -87,6 +170,10 @@ if (typeof window !== "undefined") {
         if (error) throw error;
         reportCloud("ok");
         if (!data) return { key, value: yerel, cloud: false };
+        // Yerel değişiklik buluta ulaşamadıysa bulut kopyası eskidir.
+        if (bekliyor && yerel !== null) {
+          return { key, value: yerel, cloud: false, bekleyen: true };
+        }
         return { key, value: data.value, cloud: true };
       } catch (e) {
         reportCloud("error", hataMetni(e));
@@ -94,8 +181,19 @@ if (typeof window !== "undefined") {
       }
     },
     async set(key, value) {
-      localStorage.setItem(localKeyFor(key), value);
-      if (!sessionUserId) return { key, value, cloud: false };
+      // Yerel kopya dolu olabilir; buluta kayıt her hâlükârda denenir.
+      const yerel = yerelYaz(localKeyFor(key), value);
+      const yerelNot = yerel.tamam
+        ? ""
+        : `"${key}" yerel kopyası yazılamadı (${yerel.neden}).`;
+
+      if (!sessionUserId) {
+        // Oturum yoksa bulut da yok: yerel yazma başarısızsa kayıt yapılamamıştır.
+        if (!yerel.tamam) {
+          reportDepolama("kayip", yerelNot);
+        }
+        return { key, value, cloud: false, local: yerel.tamam };
+      }
       try {
         const { error } = await supabase.from("user_data").upsert({
           user_id: sessionUserId,
@@ -105,14 +203,32 @@ if (typeof window !== "undefined") {
         });
         if (error) throw error;
         reportCloud("ok");
-        return { key, value, cloud: true };
+        bekleyenCikar(key);
+        // "buyuk" bilinçli bir tercihtir (değer yalnızca bulutta tutulur),
+        // yalnızca gerçek kota hatasında kullanıcı uyarılır.
+        if (!yerel.tamam && yerel.neden === "kota") {
+          reportDepolama("yerelDolu", yerelNot);
+        }
+        return { key, value, cloud: true, local: yerel.tamam };
       } catch (e) {
         reportCloud("error", hataMetni(e));
-        return { key, value, cloud: false };
+        if (yerel.tamam) {
+          // Yerelde güvende; buluta ulaşınca gönderilmek üzere işaretle.
+          bekleyenEkle(key);
+        } else {
+          // Hem yerel hem bulut başarısız: veri kaybı riski var, açıkça bildir.
+          reportDepolama("kayip", `"${key}" kaydedilemedi: ${hataMetni(e)}`);
+        }
+        return { key, value, cloud: false, local: yerel.tamam };
       }
     },
     async delete(key) {
-      localStorage.removeItem(localKeyFor(key));
+      bekleyenCikar(key);
+      try {
+        localStorage.removeItem(localKeyFor(key));
+      } catch (e) {
+        /* yerel silme başarısız olsa da buluttan silinmeyi dene */
+      }
       if (!sessionUserId) return { key, deleted: true, cloud: false };
       try {
         const { error } = await supabase
@@ -575,6 +691,8 @@ export default function App() {
   const [accountRole, setAccountRole] = useState("owner");
   const [cloudState, setCloudState] = useState("local"); // local | ok | error
   const [cloudDetail, setCloudDetail] = useState("");
+  // Kaydın yazılamadığı durumlar: { durum: "kayip" | "yerelDolu", detay }
+  const [depolamaUyari, setDepolamaUyari] = useState(null);
   const [tenantView, setTenantView] = useState([]);
   const [yeniSifre, setYeniSifre] = useState("");
   const [profilMesaji, setProfilMesaji] = useState("");
@@ -844,6 +962,9 @@ export default function App() {
       setCloudState(state);
       setCloudDetail(detail);
     });
+    onDepolamaDurumu((durum, detay) => {
+      setDepolamaUyari({ durum, detay });
+    });
   }, []);
 
   const loadAccountRole = async (user) => {
@@ -881,26 +1002,39 @@ export default function App() {
   // Eski sürüm tek bir paylaşılan yerel alan kullanıyordu (hasyek:*). İlk girişte
   // bu kayıtları kullanıcının kendi alanına taşıyoruz ki başka hesap devralmasın.
   const migrateLegacyLocalData = async () => {
-    const tasinan = [];
+    // Eski kayıtlar kullanıcının alanına taşınır. Yerel alan dolu olabileceği
+    // için taşıma buluta da yapılır ve hiçbir adım oturum akışını bozmaz.
+    const tasinacak = [];
     for (const key of Object.values(STORAGE_KEYS)) {
-      const eski = localStorage.getItem(key);
-      if (eski === null) continue;
-      if (localStorage.getItem(localKeyFor(key)) === null) {
-        localStorage.setItem(localKeyFor(key), eski);
-        tasinan.push(key);
+      let eski = null;
+      try {
+        eski = localStorage.getItem(key);
+      } catch (e) {
+        eski = null;
       }
-      localStorage.removeItem(key);
+      if (eski === null) continue;
+      try {
+        if (localStorage.getItem(localKeyFor(key)) === null) {
+          yerelYaz(localKeyFor(key), eski);
+        }
+      } catch (e) {
+        /* yerel kopya yazılamadı; değer elimizde, buluta gönderilecek */
+      }
+      tasinacak.push({ key, deger: eski });
+      try {
+        localStorage.removeItem(key);
+      } catch (e) {
+        /* yoksay */
+      }
     }
-    for (const key of tasinan) {
-      const deger = localStorage.getItem(localKeyFor(key));
-      if (deger === null) continue;
+    for (const { key, deger } of tasinacak) {
       try {
         await window.storage.set(key, deger);
       } catch (e) {
         /* bulut yoksa yerel kopya yeterli */
       }
     }
-    return tasinan;
+    return tasinacak.map((t) => t.key);
   };
 
   const applySession = async (s) => {
@@ -1093,6 +1227,29 @@ export default function App() {
     }
   };
 
+  // Buluta gönderilememiş (bekleyen) kayıtları tekrar dener. Başarılı olanlar
+  // listeden çıkar; olmayanlar bir sonraki açılışta yeniden denenir.
+  const bekleyenleriGonder = async () => {
+    for (const key of bekleyenOku()) {
+      let deger = null;
+      try {
+        deger = localStorage.getItem(localKeyFor(key));
+      } catch (e) {
+        deger = null;
+      }
+      if (deger === null) {
+        bekleyenCikar(key);
+        continue;
+      }
+      try {
+        const sonuc = await window.storage.set(key, deger);
+        if (!sonuc || sonuc.cloud) bekleyenCikar(key);
+      } catch (e) {
+        /* bir sonraki açılışta tekrar denenir */
+      }
+    }
+  };
+
   // Veriler yalnızca oturum bilindikten sonra, o kullanıcının alanından yüklenir.
   useEffect(() => {
     if (!authReady) return;
@@ -1151,6 +1308,8 @@ export default function App() {
         )
       ]);
       if (alive) setLoaded(true);
+      // Bir önceki oturumda buluta gönderilememiş kayıtlar varsa şimdi gönder.
+      await bekleyenleriGonder();
     })();
     return () => {
       alive = false;
@@ -1174,12 +1333,59 @@ export default function App() {
     });
   }, [loaded, session?.user?.id]);
 
+  // Kayıt hiçbir yere yazılamadığında kullanıcıyı uyarır (oturumda bir kez
+  // sesli uyarı, her zaman görünür bildirim şeridi).
+  const kayitHatasiniBildir = (key, mesaj) => {
+    setDepolamaUyari({ durum: "kayip", detay: mesaj });
+    if (depolamaKayipUyarildi) return;
+    depolamaKayipUyarildi = true;
+    alert(
+      "Bilgiler kaydedilemedi!\n\n" +
+        mesaj +
+        "\n\nBu durum genellikle tarayıcının yerel alanının (localStorage) dolmasından " +
+        "kaynaklanır. Üstte çıkan \"Yerel kopyaları temizle\" düğmesiyle alanı boşaltıp " +
+        "tekrar deneyebilirsiniz. Verilerinizin asıl kopyası bulutta olduğu için silinmez."
+    );
+  };
+
+  // Yerel kopyaları siler ve veriyi buluttan yeniden yükler.
+  const yerelKopyalariTemizle = () => {
+    if (
+      !confirm(
+        "Bu cihazdaki yerel kopyalar temizlenecek ve veriler buluttan yeniden yüklenecek.\n\n" +
+          "İnternet bağlantınızın açık olduğundan emin olun. Devam edilsin mi?"
+      )
+    ) {
+      return;
+    }
+    for (const k of Object.values(STORAGE_KEYS)) {
+      try {
+        localStorage.removeItem(k);
+      } catch (e) {
+        /* yoksay */
+      }
+      try {
+        localStorage.removeItem(localKeyFor(k));
+      } catch (e) {
+        /* yoksay */
+      }
+    }
+    depolamaKayipUyarildi = false;
+    setDepolamaUyari(null);
+    window.location.reload();
+  };
+
   const persist = async (key, value, setter) => {
     setter(value);
     try {
-      await window.storage.set(key, JSON.stringify(value));
+      const sonuc = await window.storage.set(key, JSON.stringify(value));
+      // Hiçbir yere yazılamadıysa kullanıcı bunu bilmeli: aksi hâlde kaybeder.
+      if (sonuc && sonuc.cloud === false && sonuc.local === false) {
+        kayitHatasiniBildir(key, `"${key}" ne bu cihaza ne buluta kaydedilebildi.`);
+      }
     } catch (e) {
       console.error("Kayıt hatasi:", key, e);
+      kayitHatasiniBildir(key, hataMetni(e));
     }
   };
   const upsert = (list, item) => {
@@ -7481,6 +7687,49 @@ export default function App() {
       </div>
 
       <main className="hy-main">
+        {depolamaUyari && (
+          <div
+            style={{
+              background: depolamaUyari.durum === "kayip" ? "#FEF2F2" : "#FFFBEB",
+              border: `1px solid ${depolamaUyari.durum === "kayip" ? "#FCA5A5" : "#FDE68A"}`,
+              color: depolamaUyari.durum === "kayip" ? "#991B1B" : "#92400E",
+              borderRadius: 12,
+              padding: "12px 16px",
+              marginBottom: 16,
+              fontSize: 13,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16
+            }}
+          >
+            <div>
+              <strong>
+                {depolamaUyari.durum === "kayip"
+                  ? "Kayıt yapılamadı!"
+                  : "Bu cihazın yerel alanı doldu"}
+              </strong>
+              <div style={{ marginTop: 4 }}>
+                {depolamaUyari.durum === "kayip"
+                  ? "Son değişikliklerinizi kaydedemedik. Aşağıdaki düğmeyle yerel kopyaları temizleyip yeniden deneyin."
+                  : "Veriler buluta kaydedilmeye devam ediyor; yalnızca bu cihazdaki kopya güncellenemiyor."}
+              </div>
+              {depolamaUyari.detay && (
+                <div style={{ marginTop: 4, fontSize: 11.5, opacity: 0.85 }}>
+                  {depolamaUyari.detay}
+                </div>
+              )}
+            </div>
+            <button
+              className="hy-btn ghost sm"
+              style={{ whiteSpace: "nowrap" }}
+              onClick={yerelKopyalariTemizle}
+            >
+              Yerel kopyaları temizle
+            </button>
+          </div>
+        )}
+
         {tab === "ozet" && renderOzet()}
         {tab === "mulkler" &&
           (selectedPropertyId ? renderPropertyDetail() : renderPropertiesList())}
