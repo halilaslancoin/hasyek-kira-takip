@@ -23,8 +23,27 @@ gerekir.
   sunucu / dosya yükleme sistemi olmadan çalışmaz (görseller yalnızca URL ile eklenir).
 - Menüdeki "Muhasebe Entegrasyonu", "Ciro Beyanları", "Hukuki Destek" öğeleri
   bilinçli olarak "Yakında" durumunda bırakıldı.
-- Banka eşleştirme, yüklenen ekstre dosyası (Excel/CSV/PDF/taranmış görüntü)
-  üzerinden çalışır; gerçek banka API entegrasyonu değildir.
+- Banka eşleştirme, yüklenen ekstre dosyası (Excel/CSV/PDF/taranmış görüntü/HTML)
+  üzerinden çalışır; gerçek banka API entegrasyonu değildir. Ekstre kolonları
+  "Tarih | Açıklama | Borç | Alacak | Bakiye" ya da tek tutar kolonlu
+  "Tarih | Fiş No | Açıklama | Tutar | Bakiye" düzeninde olabilir. Tutar
+  "Tutar" kolonundan okunur, "Bakiye" yalnızca ikincil adaydır (bakiye ile borç
+  otomatik kapatılmaz) ve "Fiş No" kolonu tutar sanılmaz.
+- İnternet şubesinden indirilen `.html` / `.htm` ekstreler etiketleri silinerek
+  değil, **tablo olarak** okunur: `<table>` içindeki her hücre ayrı kolondur, bu
+  yüzden Tarih / Fiş No / Açıklama / Tutar / Bakiye ayrı ayrı çıkar (etiketler
+  silinseydi tüm satırlar tek satıra düşer ve hepsi "açıklama" olurdu). Kapanış
+  `</td>` etiketi eksik olan bozuk HTML, `colspan` ile birleşmiş hücreler, iç içe
+  tablolar ve `&ccedil;` / `&#351;` gibi HTML varlıkları da desteklenir. Tablo
+  içermeyen HTML (ör. `<div>` ya da `<pre>` tabanlı) düz metin gibi okunur.
+- Taranmış ekstrelerde OCR metni gürültülüdür: IBAN/hesap başlığı, "Sayfa Sonu
+  Bakiye" gibi altlıklar ve uzun açıklama yüzünden alta sarkan tutarlar tolere
+  edilir. Ay adlı tarih ("10 Eylül 2026") ve boşluklu binlik ayracı ("30 000,00")
+  da okunur.
+- Tutarı ya da açıklaması çözülemeyen satırlar sessizce atılmaz: yükleme
+  sonrasında "N satır okunamadı" uyarısı ve satır listesi gösterilir (böylece
+  ödenmiş bir taksit yanlışlıkla ödenmemiş görünmez). Yalnızca başlık/altlık ve
+  toplam/bakiye satırları bu listede gösterilmez, tamamen yok sayılır.
 - Kira sözleşmesi okuma taranmış belgelerde Tesseract OCR kullanır; ilk
   kullanımda dil verisi internetten indirilir ve okuma kalitesi taramaya bağlıdır.
   Word şablonunu doğrudan PDF'e aktarırsanız metin katmanı okunur ve OCR hiç
@@ -45,7 +64,7 @@ gerekir.
 npm test
 ```
 Sözleşme ayrıştırma, ekstre eşleştirme ve taksit takvimi mantığını kapsar
-(toplam ~220 kontrol). Testler ağ veya tarayıcı gerektirmez.
+(toplam 380 kontrol). Testler ağ veya tarayıcı gerektirmez.
 
 ## Teşhis aracı
 ```

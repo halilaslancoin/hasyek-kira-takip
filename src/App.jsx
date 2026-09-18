@@ -43,8 +43,8 @@ import {
 } from "./contractParser.mjs";
 import { xlsxSatirlariniOku } from "./xlsxLite.mjs";
 import {
-  metindenHareketler,
-  satirlardanHareketler,
+  metindenHareketlerAyrintili,
+  satirlardanHareketlerAyrintili,
   eslesmeleriBul
 } from "./statementParser.mjs";
 
@@ -793,6 +793,9 @@ export default function App() {
   const [yuklenenEkstre, setYuklenenEkstre] = useState(null);
   const [islemDurumu, setIslemDurumu] = useState("");
   const [ekstreIsleniyor, setEkstreIsleniyor] = useState(false);
+  // Tutarı/açıklaması çözülemeyen satırlar: sessizce kaybolmasınlar, çünkü
+  // ödenmiş bir taksiti ödenmemiş gibi gösterebilirler (bkz. ekstreYukle).
+  const [ekstreOkunamayanlar, setEkstreOkunamayanlar] = useState([]);
   const [bankIntegrations, setBankIntegrations] = useState([]);
   const [accountingData, setAccountingData] = useState({
     product: "Logo Yazılım",
@@ -7138,29 +7141,33 @@ export default function App() {
   }
 
   /* -------------------------------------------------- BANKA EKSTRESİ ----
-     Ekstre dosyası okunur (Excel / PDF / taranmış görüntü / CSV), hareketler
-     çıkarılır ve bekleyen taksit-senetlerle eşleştirilir. Kesin eşleşmeler
-     otomatik kapatılır; yalnızca tutarı uyuşanlar onay için listelenir. */
+     Ekstre dosyası okunur (Excel / PDF / taranmış görüntü / CSV / HTML),
+     hareketler çıkarılır ve bekleyen taksit-senetlerle eşleştirilir. Kesin
+     eşleşmeler otomatik kapatılır; yalnızca tutarı uyuşanlar onay için
+     listelenir. HTML dosyaları ayrıştırıcıda TABLO olarak okunur; böylece
+     Tarih / Fiş No / Açıklama / Tutar / Bakiye ayrı ayrı çıkar. */
   const ekstreHareketleriniOku = async (file) => {
     const ad = (file.name || "").toLowerCase();
     if (ad.endsWith(".xlsx")) {
       const matris = await xlsxSatirlariniOku(await file.arrayBuffer());
-      return satirlardanHareketler(matris);
+      return satirlardanHareketlerAyrintili(matris);
     }
     if (ad.endsWith(".xls")) {
       throw new Error("Eski .xls biçimi okunamıyor; dosyayı .xlsx olarak kaydedip tekrar deneyin.");
     }
     if (ad.endsWith(".csv") || ad.endsWith(".txt")) {
-      return metindenHareketler(await file.text());
+      return metindenHareketlerAyrintili(await file.text());
     }
     if (ad.endsWith(".html") || ad.endsWith(".htm")) {
-      const html = await file.text();
-      return metindenHareketler(html.replace(/<[^>]+>/g, " "));
+      // Etiketler BURADA silinmez: ayrıştırıcı HTML'i tablo (satır/hücre) olarak
+      // okur. Silinseydi Tarih/Fiş No/Tutar/Bakiye tek satıra düşer ve hepsi
+      // "açıklama" olurdu.
+      return metindenHareketlerAyrintili(await file.text());
     }
     const { metin } = await sozlesmeMetniniAl(file, (oran, mesaj) =>
       setIslemDurumu(mesaj ? `${mesaj}...` : "Belge okunuyor...")
     );
-    return metindenHareketler(metin);
+    return metindenHareketlerAyrintili(metin);
   };
 
   // Eşleşen hareketleri kayıtlara işler: taksit ödendi, senet alındı olur.
@@ -7197,11 +7204,15 @@ export default function App() {
     setYuklenenEkstre(file.name);
     setEkstreIsleniyor(true);
     setIslemDurumu(`"${file.name}" okunuyor...`);
+    setEkstreOkunamayanlar([]);
     try {
-      const hareketler = await ekstreHareketleriniOku(file);
+      const { hareketler, atlananlar } = await ekstreHareketleriniOku(file);
+      setEkstreOkunamayanlar(atlananlar || []);
       if (!hareketler.length) {
         setIslemDurumu(
-          "Dosyadan hesap hareketi okunamadı. Tarih ve tutar kolonlarının dolu olduğundan emin olun."
+          atlananlar && atlananlar.length
+            ? `Dosyadan hesap hareketi okunamadı; ${atlananlar.length} satır çözümlenemedi. Aşağıdaki satırları kontrol edin.`
+            : "Dosyadan hesap hareketi okunamadı. Tarih ve tutar kolonlarının dolu olduğundan emin olun."
         );
         return;
       }
@@ -7245,10 +7256,13 @@ export default function App() {
 
       const kesinSayisi = kayitlar.filter((k) => k.matched).length;
       const bekleyenSayisi = kayitlar.filter((k) => !k.matched && k.oneri).length;
+      const okunamayanSayisi = (atlananlar || []).length;
       setIslemDurumu(
         `${kayitlar.length} hareket okundu · ${kesinSayisi} otomatik kapatıldı · ` +
           `${bekleyenSayisi} hareket onay bekliyor · ` +
-          `${kayitlar.length - kesinSayisi - bekleyenSayisi} eşleşmedi.`
+          `${kayitlar.length - kesinSayisi - bekleyenSayisi} eşleşmedi` +
+          (okunamayanSayisi ? ` · ${okunamayanSayisi} satır okunamadı (aşağıda)` : "") +
+          "."
       );
     } catch (e) {
       setIslemDurumu("Ekstre okunamadı: " + (e && e.message ? e.message : String(e)));
@@ -7308,6 +7322,7 @@ export default function App() {
     saveBankStatements([]);
     setYuklenenEkstre(null);
     setIslemDurumu("");
+    setEkstreOkunamayanlar([]);
   };
 
   function renderBankaTab() {
@@ -7370,9 +7385,12 @@ export default function App() {
             )}
           </div>
           <p className="muted small">
-            Excel (.xlsx), CSV/TXT, PDF ekstre veya taranmış görüntü yükleyebilirsiniz. Açıklamasında
-            kiracı adı ya da taşınmaz numarası geçen ve tutarı bekleyen bir taksitle birebir uyuşan
-            hareketler otomatik kapatılır; yalnızca tutarı uyuşanlar onayınıza sunulur.
+            Excel (.xlsx), CSV/TXT, HTML, PDF ekstre veya taranmış görüntü
+            yükleyebilirsiniz. HTML ekstreler tablo olarak okunur; Tarih, Fiş No,
+            Açıklama, Tutar ve Bakiye ayrı ayrı çıkarılır. Açıklamasında kiracı adı
+            ya da taşınmaz numarası geçen ve tutarı bekleyen bir taksitle birebir
+            uyuşan hareketler otomatik kapatılır; yalnızca tutarı uyuşanlar
+            onayınıza sunulur.
           </p>
           <input
             type="file"
@@ -7398,6 +7416,41 @@ export default function App() {
             >
               {ekstreIsleniyor ? "Belge okunuyor: " : ""}
               {islemDurumu}
+            </div>
+          )}
+
+          {ekstreOkunamayanlar.length > 0 && (
+            <div
+              style={{
+                background: "#FFFBEB",
+                color: "#92400E",
+                border: "1px solid #FDE68A",
+                padding: 12,
+                borderRadius: 8,
+                marginBottom: 16,
+                fontSize: "12.5px"
+              }}
+            >
+              <strong>
+                {ekstreOkunamayanlar.length} satır okunamadı; bu satırlar için ödeme kaydı
+                oluşturulmadı.
+              </strong>
+              <div style={{ marginTop: 6 }}>
+                Bir ödeme yukarıdaki listede yoksa buraya bakın: gerçek bir tahsilat bu
+                satırlardan biriyse ödemeyi elle işaretleyin.
+              </div>
+              <ul style={{ margin: "8px 0 0 18px", padding: 0, lineHeight: 1.6 }}>
+                {ekstreOkunamayanlar.slice(0, 8).map((s, i) => (
+                  <li key={i}>
+                    <span style={{ color: "#B45309" }}>[{s.neden}]</span> {s.satir}
+                  </li>
+                ))}
+              </ul>
+              {ekstreOkunamayanlar.length > 8 && (
+                <div style={{ marginTop: 4 }}>
+                  … ve {ekstreOkunamayanlar.length - 8} satır daha.
+                </div>
+              )}
             </div>
           )}
 

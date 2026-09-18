@@ -23,7 +23,8 @@ export function tutarCoz(ham) {
   if (!s || !/\d/.test(s)) return null;
 
   const parantezli = /^\(.*\)$/.test(s);
-  const negatif = parantezli || /^\s*-/.test(s) || /\s-\s*$/.test(s);
+  // "30.000,00-" gösterimi de çıkış (borç) anlamına gelir.
+  const negatif = parantezli || /^\s*-/.test(s) || /\s-\s*$/.test(s) || /\d\s*-\s*$/.test(s);
   let govde = s.replace(/[^\d.,]/g, "");
   if (!/\d/.test(govde)) return null;
 
@@ -108,10 +109,23 @@ const BASLIK_ANAHTARLARI = [
   { alan: "tutar", re: /(^|[^a-z])(tutar|miktar|amount|islem tutari)/ },
   { alan: "borc", re: /(borc|debit|cikan|giden|odenen)/ },
   { alan: "alacak", re: /(alacak|credit|giren|tahsil|yatirilan)/ },
-  { alan: "bakiye", re: /(bakiye|balance|kalan)/ }
+  { alan: "bakiye", re: /(bakiye|balance|kalan)/ },
+  // Fiş No / dekont no kolonu tutar değildir: tanınmazsa satır sonundaki tutar
+  // bloğu yanlış kolondan (fiş numarasından) okunabilirdi.
+  {
+    alan: "fisNo",
+    re: /(^|[^a-z])(fis|dekont|makbuz|referans|evrak|seri|belge|islem|hareket)\s*(no|no\.|nr|numarasi|numaralari|numarali)\s*$/
+  }
 ];
 
 const TOPLAM_RE = /^(genel\s+)?(toplam|ara toplam|bakiye|devir|acilis|kapanis|onceki bakiye|son bakiye)/;
+
+/* Tarih taşımayan ekstre başlık/altlık satırları (IBAN, hesap no, sayfa
+   bilgisi, bakiye özeti) hareket DEĞİLDİR. Aksi hâlde taranmış ekstrenin her
+   sayfasındaki "Sayfa Sonu Bakiye 44.000,00" satırı ödeme sanılır ve yanlış
+   borç kapatılabilir. Kelime sınırı gözetilir ("Özşube" gibi adlar etkilenmez). */
+const GURULTU_RE =
+  /(^|[^a-z])(iban|hesap|sube|musteri|sayfa|ekstre|swift|bakiye|devir|toplam|mutabakat|dekont tarihi)([^a-z]|$)/;
 
 function baslikSatiriMi(satir) {
   const sade = satir.map((h) => trSadelestir(h));
@@ -137,13 +151,69 @@ function baslikHaritasi(satir) {
   return harita;
 }
 
+/* Açıklama kolonu boşsa satırdaki en uzun METİN hücresi açıklama sayılır.
+   Salt sayı hücreleri (tutar / bakiye / fiş no) ve sayı yoğun hücreler (IBAN,
+   hesap no) elenir. Ancak kolonlar tek hücrede birleşmişse (colspan) açıklama
+   hücresi fiş numarasını da taşır ("12345 IBRAHIM ... KIRA"); bu hücre
+   reddedilirse açıklama tamamen kaybolur, bu yüzden harf yoğunluğu yeterliyse
+   yedek olarak kabul edilir. */
 function metinHucresi(satir) {
   let enIyi = "";
+  let gevsek = "";
   for (const h of satir) {
     const s = String(h || "").trim();
-    if (s.length > enIyi.length && /[a-zçğıöşü]/i.test(s) && !/\d{4,}/.test(s)) enIyi = s;
+    if (!s || !/[a-zçğıöşü]/i.test(s) || tutarHucresiMi(s)) continue;
+    if (!/\d{4,}/.test(s)) {
+      if (s.length > enIyi.length) enIyi = s;
+    } else if ((s.match(/[a-zçğıöşü]/gi) || []).length >= 3 && s.length > gevsek.length) {
+      gevsek = s;
+    }
   }
-  return enIyi;
+  return enIyi || gevsek;
+}
+
+/* Banka ekstrelerinin kolon düzeni sağda sabittir: "... Açıklama | Tutar |
+   Bakiye". Bu yüzden bir kolon başlığı tanınmadığında tutar, satırın sonundaki
+   ARDIŞIK tutar hücrelerinden okunur: açıklama (metin) ya da Fiş No (tanınan
+   kolon) bu zinciri keser ve tutar sanılmaz. */
+const TUTAR_HUCRE_RE = /^[-+(]?\s*\d[\d.,]*\s*[-)]?\s*(?:tl|try|₺)?$/i;
+
+const tutarHucresiMi = (deger) => {
+  const s = String(deger === undefined || deger === null ? "" : deger).trim();
+  return !!s && /\d/.test(s) && TUTAR_HUCRE_RE.test(s);
+};
+
+/* BİÇİMLİ tutar hücresi mi ("30.000,00", "2.500,50-")? Başlık satırı ayırt
+   edilirken kullanılır: "2026" gibi çıplak sayı taşıyan bir kolon başlığı
+   ("2026 | Açıklama | Tutar") yanlışlıkla hareket sayılmamalıdır. */
+const bicimliTutarHucresiMi = (deger) => tutarHucresiMi(deger) && /[.,]\d/.test(String(deger).trim());
+
+/* Satır kolon başlığı mı? En az iki kolon adı tanınmalı VE satır tarih ya da
+   biçimli tutar taşımamalıdır: "Tarih: 10.09.2026 | Tutar: 30.000,00" gibi
+   etiketli bir HAREKET satırı başlık sanılıp atlanmamalıdır. */
+const baslikSatiriGibiMi = (satir) =>
+  Array.isArray(satir) &&
+  baslikSatiriMi(satir) >= 2 &&
+  !satir.some((h) => tarihCoz(h)) &&
+  !satir.some((h) => bicimliTutarHucresiMi(h));
+
+function sondakiTutarBlogu(satir, haric = new Set()) {
+  const blok = [];
+  for (let i = satir.length - 1; i >= 0; i--) {
+    const s = String(satir[i] === undefined || satir[i] === null ? "" : satir[i]).trim();
+    if (!s) {
+      // Satır sonundaki boş hücreler atlanır; blok başladıysa boşluk ayraçtır.
+      if (blok.length) break;
+      continue;
+    }
+    if (haric.has(i)) {
+      if (blok.length) break;
+      continue;
+    }
+    if (!tutarHucresiMi(s)) break;
+    blok.unshift(s);
+  }
+  return blok;
 }
 
 function satiriYorumla(satir, harita) {
@@ -165,10 +235,13 @@ function satiriYorumla(satir, harita) {
   if (!aciklama) aciklama = metinHucresi(satir);
 
   let tutar = null;
+  let tutarlar = null;
   let yon = "giris";
-  const alacak = tutarCoz(hucre(harita.alacak));
-  const borc = tutarCoz(hucre(harita.borc));
-  if (alacak !== null || borc !== null) {
+  const alacak = harita.alacak !== undefined ? tutarCoz(hucre(harita.alacak)) : null;
+  const borc = harita.borc !== undefined ? tutarCoz(hucre(harita.borc)) : null;
+
+  if (harita.alacak !== undefined || harita.borc !== undefined) {
+    // Borç/Alacak düzeni: hangi kolon doluysa yönü o belirler.
     if (alacak !== null && alacak !== 0) {
       tutar = Math.abs(alacak);
       yon = "giris";
@@ -177,111 +250,579 @@ function satiriYorumla(satir, harita) {
       yon = "cikis";
     }
   } else {
-    const tekTutar = hucre(harita.tutar) || satir.find((h) => /^\s*[-+(]?\s*\d[\d.,]*\s*\)?\s*(tl|try|₺)?\s*$/i.test(String(h || "")));
-    const n = tutarCoz(tekTutar);
-    if (n !== null) {
-      tutar = Math.abs(n);
-      yon = n < 0 || /^\s*\(/.test(String(tekTutar)) ? "cikis" : "giris";
+    // Tutar (+ Bakiye) düzeni: "Tutar" birincil, "Bakiye" yalnızca ikincil
+    // adaydır; böylece bakiye ile borç otomatik kapatılmaz, öneri olarak kalır.
+    const adaylar = [];
+    const tutarHucresi = harita.tutar !== undefined ? hucre(harita.tutar).trim() : "";
+    if (tutarHucresi) {
+      adaylar.push(tutarHucresi);
+      const bakiyeHucresi = harita.bakiye !== undefined ? hucre(harita.bakiye).trim() : "";
+      if (tutarHucresiMi(bakiyeHucresi)) adaylar.push(bakiyeHucresi);
+    } else {
+      // Tutar kolonu yok ya da boş: satır sonundaki ardışık blok (Tutar, Bakiye).
+      const haric = new Set();
+      if (harita.tarih !== undefined) haric.add(harita.tarih);
+      if (harita.fisNo !== undefined) haric.add(harita.fisNo);
+      if (harita.bakiye !== undefined) haric.add(harita.bakiye);
+      adaylar.push(...sondakiTutarBlogu(satir, haric));
+    }
+
+    const cozulen = adaylar
+      .map((ham) => ({ ham, n: tutarCoz(ham) }))
+      .filter((x) => x.n !== null && x.n !== 0);
+    if (cozulen.length) {
+      tutar = Math.abs(cozulen[0].n);
+      if (cozulen.length > 1) tutarlar = cozulen.map((x) => Math.abs(x.n));
+      yon = cozulen[0].n < 0 || /^\s*[-+(]/.test(cozulen[0].ham) ? "cikis" : "giris";
     }
   }
 
-  return { tarih, aciklama, tutar, yon, satir };
+  return { tarih, aciklama, tutar, tutarlar, yon, satir };
+}
+
+/* Ekstre başlık/altlık satırı mı? İki biçim ayırt edilir:
+   * "Etiket: değer" satırları ("Ekstre Tarihi: 18.09.2026", "Hesap No: ...")
+     tarih taşısalar bile hareket değildir.
+   * Tarih taşımayan ve başlık/altlık kelimesi içeren satırlar
+     ("Sayfa Sonu Bakiye 44.000,00").
+   Açıklamasında bu kelimeler geçen GERÇEK hareketler ("PENDIK SUBE KIRA
+   TAHSILATI") elenmez: ikinci kural yalnızca tarihsiz satırlara uygulanır. */
+/* Banka ekstrelerinin üst bilgisi "Etiket: değer" biçimindedir; bunlar tarih
+   taşısalar bile hareket değildir. Etiket listesi bankaların yaygın kullandığı
+   alanları kapsar; gerçek hareket açıklamaları (ör. "PENDIK SUBE KIRA
+   TAHSILATI") iki nokta taşımadığı için etkilenmez. */
+const BASLIK_ETIKET_RE =
+  /(iban|hesap|sayfa|ekstre|swift|mutabakat|dekont tarihi|muhasebe|birim|sube|musteri|temsilci|adres|telefon|vergi|doviz|para birimi|kayit tarihi|islem tarihi)\s*(no|no\.|nr|numarasi|numaralari|tarihi|tarih|birimi|birim|temsilcisi|adresi|adi|soyadi)?\s*:/;
+
+function gurultuSatiriMi(aciklama, tarih) {
+  const sade = trSadelestir(aciklama).trim();
+  if (!sade) return false;
+  if (BASLIK_ETIKET_RE.test(sade)) return true;
+  return !tarih && GURULTU_RE.test(sade);
 }
 
 /** Tablo satırlarını (xlsx matrisi, CSV) hesap hareketlerine çevirir. */
 export function satirlardanHareketler(satirlar) {
-  if (!Array.isArray(satirlar) || !satirlar.length) return [];
+  return satirlardanHareketlerAyrintili(satirlar).hareketler;
+}
 
+/* Raporlanacak en fazla satır: uzun ekstrelerde arayüzü boğmamak için. */
+const RAPOR_MAKS = 40;
+
+const satirDoluMu = (satir) =>
+  Array.isArray(satir) &&
+  satir.some((h) => String(h === undefined || h === null ? "" : h).trim());
+
+const satirOzeti = (degerler) =>
+  (Array.isArray(degerler) ? degerler : [degerler])
+    .map((x) => String(x === undefined || x === null ? "" : x).trim())
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, 180);
+
+/**
+ * Tablo satırlarını hareketlere çevirir ve OKUNAMAYAN satırları da bildirir.
+ * Taranmış/eksik ekstrelerde bir satırın sessizce kaybolması, ödenmemiş
+ * görünen bir taksit demektir; bu yüzden atlananlar kullanıcıya gösterilir.
+ * Dönen: { hareketler, atlananlar, yoksayilanlar }
+ */
+export function satirlardanHareketlerAyrintili(satirlar) {
+  const hareketler = [];
+  const atlananlar = [];
+  const yoksayilanlar = [];
+  if (!Array.isArray(satirlar) || !satirlar.length) return { hareketler, atlananlar, yoksayilanlar };
+
+  // İLK tanınan başlık satırı temel alınır (en yüksek puanlısı değil): çok
+  // sayfalı ekstrede sonraki tablonun başlığı daha çok kolon tanısa bile ilk
+  // tablonun hareket satırlarını yutmamalıdır. Tekrarlanan başlıklar döngü
+  // içinde ele alınır ve kolon düzeni orada güncellenir.
   let baslikIndeksi = -1;
-  let enIyiPuan = 0;
   for (let i = 0; i < Math.min(satirlar.length, 25); i++) {
-    const puan = baslikSatiriMi(satirlar[i] || []);
-    if (puan > enIyiPuan) {
-      enIyiPuan = puan;
+    if (baslikSatiriGibiMi(satirlar[i] || [])) {
       baslikIndeksi = i;
+      break;
     }
   }
-  const harita = enIyiPuan >= 2 ? baslikHaritasi(satirlar[baslikIndeksi]) : {};
-  const baslangic = enIyiPuan >= 2 ? baslikIndeksi + 1 : 0;
+  let harita = baslikIndeksi >= 0 ? baslikHaritasi(satirlar[baslikIndeksi]) : {};
+  const baslangic = baslikIndeksi >= 0 ? baslikIndeksi + 1 : 0;
 
-  const hareketler = [];
+  const ekle = (satir, neden, yoksay) => {
+    const hedef = yoksay ? yoksayilanlar : atlananlar;
+    if (hedef.length >= RAPOR_MAKS) return;
+    hedef.push({ satir: satirOzeti(satir), neden });
+  };
+
   for (let i = baslangic; i < satirlar.length; i++) {
     const satir = satirlar[i] || [];
-    if (!satir.some((h) => String(h === undefined || h === null ? "" : h).trim())) continue;
+    if (!satirDoluMu(satir)) continue;
+    // Çok sayfalı ekstrelerde (ör. HTML'de her sayfa ayrı bir <table>) kolon
+    // başlığı her sayfada TEKRARLANIR. Tekrarlanan başlık bir hareket değildir:
+    // "okunamayan satır" diye raporlanmamalı, ayrıca aşağıdaki satırlar için
+    // yeni kolon düzeni geçerli olmalıdır.
+    if (baslikSatiriGibiMi(satir)) {
+      const yeniHarita = baslikHaritasi(satir);
+      // Daha eksik bir alt başlık, tanınan kolonları kaybettirmesin.
+      if (Object.keys(yeniHarita).length >= Object.keys(harita).length) harita = yeniHarita;
+      continue;
+    }
     const h = satiriYorumla(satir, harita);
-    if (h.tutar === null || h.tutar === 0) continue;
-    if (!h.aciklama && !h.tarih) continue;
-    if (TOPLAM_RE.test(trSadelestir(h.aciklama).trim())) continue;
+    if (TOPLAM_RE.test(trSadelestir(h.aciklama).trim())) {
+      ekle(satir, "Toplam/bakiye satırı", true);
+      continue;
+    }
+    if (gurultuSatiriMi(h.aciklama, h.tarih)) {
+      ekle(satir, "Ekstre başlığı/altlığı", true);
+      continue;
+    }
+    if (h.tutar === null || h.tutar === 0) {
+      // Tarih ya da açıklama varsa bu satır bir hareket olmalıydı.
+      if (h.tarih || h.aciklama) ekle(satir, "Tutar okunamadı", false);
+      continue;
+    }
+    if (!h.aciklama && !h.tarih) {
+      ekle(satir, "Açıklama okunamadı", false);
+      continue;
+    }
     hareketler.push(h);
   }
-  return hareketler;
+  return { hareketler, atlananlar, yoksayilanlar };
+}
+
+/* --------------------------------------------------------------- HTML ----
+
+   Banka internet şubeleri ekstreyi çoğu zaman HTML olarak indirir. Etiketleri
+   boşlukla silmek tablo yapısını yok eder: bütün satırlar tek satıra düşer ve
+   her şey tek bir "açıklama" olur (Tarih/Fiş No/Tutar/Bakiye ayrı ayrı
+   okunamaz). Bu yüzden HTML önce satır/hücre matrisine çevrilir ve normal tablo
+   yolu işletilir. Tablo yoksa blok etiketleri satır sonuna çevrilip metin yolu
+   kullanılır. */
+
+const HTML_VARLIKLARI = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", shy: "",
+  ccedil: "ç", Ccedil: "Ç", gbreve: "ğ", Gbreve: "Ğ", imath: "ı", Idot: "İ",
+  ouml: "ö", Ouml: "Ö", scedil: "ş", Scedil: "Ş", uuml: "ü", Uuml: "Ü",
+  ndash: "-", mdash: "-", hellip: "...", middot: " ", bull: " ", deg: "°",
+  euro: "€", pound: "£", copy: "©", reg: "®", trade: "™"
+};
+
+/** "&nbsp;" · "&#231;" · "&#xE7;" · "&amp;" gibi HTML varlıklarını karaktere çevirir. */
+export function htmlVarliklariniCoz(metin) {
+  return String(metin || "").replace(
+    /&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g,
+    (tam, kod) => {
+      if (kod[0] === "#") {
+        const onalti = kod[1] === "x" || kod[1] === "X";
+        const sayi = parseInt(kod.slice(onalti ? 2 : 1), onalti ? 16 : 10);
+        if (!Number.isFinite(sayi) || sayi < 1 || sayi > 0x10ffff) return tam;
+        try {
+          return String.fromCodePoint(sayi);
+        } catch {
+          return tam;
+        }
+      }
+      const ad = HTML_VARLIKLARI[kod] !== undefined ? kod : kod.toLowerCase();
+      return HTML_VARLIKLARI[ad] !== undefined ? HTML_VARLIKLARI[ad] : tam;
+    }
+  );
+}
+
+const HTML_MI_RE =
+  /<(?:!doctype\s+html|html|head|body|table|thead|tbody|tfoot|tr|td|th|div|span|meta|p|pre)\b/i;
+
+/** Metin bir HTML belgesi/parçası mı? (PDF/OCR/CSV metinlerinde "<" olmaz.) */
+export function htmlMi(metin) {
+  return HTML_MI_RE.test(String(metin || ""));
+}
+
+/* Hücre içeriği: <br> ayraç, diğer etiketler boşluk olur. */
+function htmlHucreMetni(parca) {
+  return htmlVarliklariniCoz(
+    String(parca || "")
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/<\/(?:p|div|li|h[1-6])>/gi, " ")
+      .replace(/<[^>]*>/g, " ")
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * HTML ekstredeki tabloları satır/hücre matrisine çevirir (xlsx matrisi ile
+ * aynı biçim). Özellikler:
+ *   * Etiketler arası gerçek hücreler korunur; böylece "Tarih | Fiş No |
+ *     Açıklama | Tutar | Bakiye" ayrı ayrı okunur.
+ *   * Kapanış </td> etiketi eksik olsa da çalışır (HTML'de isteğe bağlıdır).
+ *   * colspan kadar boş hücre eklenir ki sonraki kolonlar kaymasın.
+ *   * Hücre içindeki iç içe tablonun metni hücreye katılır, satırları matrise
+ *     karışmaz.
+ * Tablo yoksa null döner; çağıran taraf düz metin yoluna düşer.
+ */
+export function htmlSatirlariniOku(html) {
+  const kaynak = String(html || "")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ");
+  if (!/<table\b/i.test(kaynak)) return null;
+
+  const matris = [];
+  const etiketRe = /<(\/?)(table|tr|td|th)\b([^>]*)>/gi;
+  let tabloDerinlik = 0;
+  let satir = null;
+  let hucreBaslangic = -1;
+  let hucreAttrs = "";
+  let m;
+
+  const satiriKapat = () => {
+    if (satir && satir.some((h) => h)) matris.push(satir);
+    satir = null;
+  };
+  const hucreyiKapat = (bitis) => {
+    if (hucreBaslangic < 0) return;
+    if (satir) {
+      satir.push(htmlHucreMetni(kaynak.slice(hucreBaslangic, bitis)));
+      const cs = hucreAttrs.match(/\bcolspan\s*=\s*["']?\s*(\d+)/i);
+      const adet = cs ? Math.min(Math.max(Number(cs[1]) || 1, 1), 50) : 1;
+      for (let k = 1; k < adet; k++) satir.push("");
+    }
+    hucreBaslangic = -1;
+    hucreAttrs = "";
+  };
+
+  while ((m = etiketRe.exec(kaynak))) {
+    const kapanis = m[1] === "/";
+    const ad = m[2].toLowerCase();
+
+    if (ad === "table") {
+      if (!kapanis) {
+        tabloDerinlik += 1;
+      } else {
+        const yeni = Math.max(0, tabloDerinlik - 1);
+        // Yalnızca EN DIŞ tablo kapanırken satır/hücre bitirilir. İç içe tablo
+        // kapanışı hücreyi bitirmemeli; aksi hâlde hücre metninin kalanı
+        // ("... TAHSILATI") kaybolur.
+        if (tabloDerinlik === 1 && yeni === 0) {
+          hucreyiKapat(m.index);
+          satiriKapat();
+        }
+        tabloDerinlik = yeni;
+      }
+      continue;
+    }
+    // Yalnızca en dış tablonun satırları toplanır; iç içe tablonun satırları
+    // hücre metnine katılır (bkz. yukarıdaki açıklama).
+    if (tabloDerinlik !== 1) continue;
+
+    if (ad === "tr") {
+      hucreyiKapat(m.index);
+      satiriKapat();
+      if (!kapanis) satir = [];
+      continue;
+    }
+    // td / th
+    if (kapanis) {
+      hucreyiKapat(m.index);
+    } else {
+      hucreyiKapat(m.index); // kapanışsız bırakılmış önceki hücre
+      if (!satir) satir = [];
+      hucreBaslangic = etiketRe.lastIndex;
+      hucreAttrs = m[3] || "";
+    }
+  }
+  hucreyiKapat(kaynak.length);
+  satiriKapat();
+
+  return matris.length ? matris : null;
+}
+
+/** Tablo yoksa: blok etiketleri satır sonuna, satır içi etiketler boşluğa çevrilir. */
+export function htmlMetneCevir(html) {
+  return htmlVarliklariniCoz(
+    String(html || "")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(
+        /<\/(?:tr|div|p|li|h[1-6]|table|thead|tbody|tfoot|section|article|header|footer|pre|dd|dt|form)>/gi,
+        "\n"
+      )
+      .replace(
+        /<(?:tr|div|p|li|h[1-6]|table|section|article|header|footer|pre|dd|dt|form)\b[^>]*>/gi,
+        "\n"
+      )
+      .replace(/<[^>]*>/g, " ")
+  );
 }
 
 /* -------------------------------------------------------------- metin ---- */
 
-const PARA_RE = /[-+(]?\s*\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?\s*\)?\s*(?:tl|try|₺)?/gi;
-const TARIH_RE = /\d{4}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{1,2}|\d{1,2}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{2,4}/;
+const TARIH_SAYI_RE =
+  /\d{4}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{1,2}|\d{1,2}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{2,4}/;
+const TARIH_ADLI_RE = /\d{1,2}\s+[a-zçğıöşü]+\s+\d{4}/i;
 
-// Binlik/ondalık ayracı ya da para birimi taşıyan tutarlar güvenilirdir;
-// çıplak tamsayılar (ör. adres içindeki "27") yalnızca başka aday yoksa kabul.
-const gucluTutar = (p) => /[.,]\d/.test(p) || /(tl|try|₺)/i.test(p);
+/* Satırdan tarihi ayıklar: sayısal ("10.09.2026") ya da ay adlı
+   ("10 Eylül 2026") biçim. Ay adı yalnızca geçerli bir tarihe çözülürse
+   ayıklanır; yoksa açıklamadaki "10 DAIRESI 2026" gibi metin korunur. */
+function satirdanTarih(satir) {
+  const sayisal = satir.match(TARIH_SAYI_RE);
+  if (sayisal) return { tarih: tarihCoz(sayisal[0]), kalan: satir.replace(sayisal[0], " ") };
 
-/** PDF/OCR metnini ya da noktalı virgülle ayrılmış CSV'yi hareketlere çevirir. */
+  const adli = satir.match(TARIH_ADLI_RE);
+  const tarih = adli ? tarihCoz(adli[0]) : "";
+  if (!tarih) return { tarih: "", kalan: satir };
+  return { tarih, kalan: satir.replace(adli[0], " ") };
+}
+
+/* Taranmış ekstrelerde binlik ayracı boşluk olabilir: "30 000,00". Yalnızca
+   "boşlukla ayrılmış rakam grubu" deseni birleştirilir: soldaki kısa bir tam
+   sayı (1-3 rakam, isteğe bağlı 3'lü gruplar), sağdaki tam 3 rakam (+ kuruş).
+   Böylece "30.000,00 130.000,00" gibi iki ayrı kolon yanlışlıkla birleşmez. */
+function binlikBosluklariBirlestir(tokenler) {
+  const sonuc = [];
+  for (let i = 0; i < tokenler.length; i++) {
+    let t = tokenler[i];
+    while (
+      i + 1 < tokenler.length &&
+      /^\d{1,3}(\d{3})*$/.test(t) &&
+      /^\d{3}([.,]\d{1,2})?$/.test(tokenler[i + 1])
+    ) {
+      t += tokenler[i + 1];
+      i += 1;
+    }
+    sonuc.push(t);
+  }
+  return sonuc;
+}
+
+// Token (hücre) tutar gibi mi? Sondaki para birimi yok sayılır.
+const metinTutarHucresiMi = (t) =>
+  TUTAR_HUCRE_RE.test(String(t || "").replace(/(tl|try|₺)$/i, ""));
+
+/* OCR metnini tokenlara ayırır. Üç düzeltme yapar:
+   * Tek başına duran para birimi ("TL") tokeni atılır: tutar değildir.
+   * İşaret sayıdan ayrılmışsa birleştirilir ("- 2.500,50" -> "-2.500,50",
+     "( 450 )" -> "(450)"). Aksi hâlde çıkış hareketi giriş sanılır.
+   * Boşluklu binlik ayracı kapatılır ("30 000,00" -> "30000,00"). */
+function tokenlereAyir(metin) {
+  const ham = String(metin || "").split(/\s+/).filter(Boolean);
+  const tokenler = [];
+  for (let i = 0; i < ham.length; i++) {
+    const t = ham[i];
+    if (/^(tl|try|₺)$/i.test(t)) continue;
+    if (/^[-+(]$/.test(t) && i + 1 < ham.length) {
+      if (t === "(") {
+        const kapali = ham[i + 2] === ")";
+        const birlesik = "(" + ham[i + 1] + (kapali ? ")" : "");
+        if (TUTAR_HUCRE_RE.test(birlesik)) {
+          tokenler.push(birlesik);
+          i += kapali ? 2 : 1;
+          continue;
+        }
+      } else if (metinTutarHucresiMi(t + ham[i + 1])) {
+        tokenler.push(t + ham[i + 1]);
+        i += 1;
+        continue;
+      }
+    }
+    tokenler.push(t);
+  }
+  return binlikBosluklariBirlestir(tokenler);
+}
+
+/* Bir satırın tutar adaylarını (Tutar ve Bakiye) seçer.
+   Kolon sırası sağda sabittir: "... Açıklama | Tutar | Bakiye".
+     * Biçimli sayılar (30.000,00) tutar/bakiyedir; son iki tanesi seçilir,
+       açıklamadaki çıplak sayılar (adres/blok no: "27") elenir.
+     * Hiç biçimli sayı yoksa satır sonundaki ARDIŞIK sayı bloğu tutar/bakiyedir;
+       kısa çıplak sayılar (blok/daire no) bloktan çıkarılır.
+   Dönen dizi [tutar] ya da [tutar, bakiye] biçimindedir.
+   `haric`: indeksleri verilen tokenler (ör. Fiş No) aday sayılmaz. */
+function metinTutarAdaylari(tokenler, haric = new Set()) {
+  const sayilar = [];
+  tokenler.forEach((t, i) => {
+    if (haric.has(i)) return;
+    const ham = String(t || "").replace(/(tl|try|₺)$/i, "");
+    if (!TUTAR_HUCRE_RE.test(ham)) return;
+    const n = tutarCoz(ham);
+    if (n === null || n === 0) return;
+    sayilar.push({ i, ham, n, bicimli: /[.,]\d/.test(ham) });
+  });
+
+  const bicimliler = sayilar.filter((x) => x.bicimli);
+  if (bicimliler.length) return bicimliler.slice(-2);
+
+  const blok = [];
+  for (let k = sayilar.length - 1; k >= 0; k--) {
+    const x = sayilar[k];
+    if (blok.length && x.i !== blok[0].i - 1) break; // araya metin girdi
+    if (String(Math.abs(x.n)).length < 3) break;     // "14" gibi kısa sayı
+    blok.unshift(x);
+  }
+  return blok.slice(-2);
+}
+
+/* Satır TAMAMEN tutarlardan mı oluşuyor? Taranmış ekstrelerde uzun açıklama
+   alta taşıp tutar/bakiye kendi satırında kalabilir; bu satır bir öncekine
+   eklenir. Açıklama içeren satır bu koşulu sağlamaz. */
+function tutarSatiriMi(metin) {
+  const tokenler = tokenlereAyir(metin);
+  return tokenler.length > 0 && tokenler.every(metinTutarHucresiMi);
+}
+
+/* Okunamayan bir metin satırının neden atlandığını açıklar. */
+function metinAtlanmaNedeni(satir, tarih) {
+  const sade = trSadelestir(satir).trim();
+  if (TOPLAM_RE.test(sade)) return { neden: "Toplam/bakiye satırı", yoksay: true };
+  if (gurultuSatiriMi(satir, tarih)) return { neden: "Ekstre başlığı/altlığı", yoksay: true };
+  // Çok sayfalı PDF/HTML metinlerinde kolon başlığı her sayfada tekrarlanır
+  // ("Tarih Açıklama Tutar"). Başlık bir hareket değildir; "okunamayan satır"
+  // uyarısına düşmemelidir. Tarih taşıyan satır başlık sayılmaz.
+  if (!tarih && baslikSatiriMi(String(satir).split(/\s+/)) >= 2) {
+    return { neden: "Ekstre başlığı/altlığı", yoksay: true };
+  }
+  return { neden: "Tutar okunamadı", yoksay: false };
+}
+
+/** PDF/OCR/HTML metnini ya da noktalı virgülle ayrılmış CSV'yi hareketlere çevirir. */
 export function metindenHareketler(metin) {
+  return metindenHareketlerAyrintili(metin).hareketler;
+}
+
+/**
+ * metindenHareketler ile aynı; ayrıca okunamayan satırları da bildirir.
+ * HTML ekstreler önce TABLO olarak okunur: etiketleri silmek bütün satırları
+ * tek satıra indirir ve her şey "açıklama" olurdu. Tablo okunamazsa düz metne
+ * çevrilip metin yolu denenir.
+ * Dönen: { hareketler, atlananlar, yoksayilanlar }
+ */
+export function metindenHareketlerAyrintili(metin) {
+  const ham = String(metin || "");
+  if (!htmlMi(ham)) return metinSatirlarindanHareketler(ham);
+
+  const matris = htmlSatirlariniOku(ham);
+  if (matris) {
+    const ayrintili = satirlardanHareketlerAyrintili(matris);
+    if (ayrintili.hareketler.length) return ayrintili;
+    // Tablo bulundu ama hareket çıkmadı (ör. kolonlar hücre yerine <pre> içinde);
+    // düz metin denemesi daha iyi sonuç verebilir.
+    const duz = metinSatirlarindanHareketler(htmlMetneCevir(ham));
+    return duz.hareketler.length ? duz : ayrintili;
+  }
+  return metinSatirlarindanHareketler(htmlMetneCevir(ham));
+}
+
+/** Satırlara ayrılmış düz metin (PDF/OCR/CSV) -> hareketler. */
+function metinSatirlarindanHareketler(metin) {
   const satirListesi = String(metin || "")
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (!satirListesi.length) return [];
+  const atlananlar = [];
+  const yoksayilanlar = [];
+  if (!satirListesi.length) return { hareketler: [], atlananlar, yoksayilanlar };
+
+  const ekle = (satir, neden, yoksay) => {
+    const hedef = yoksay ? yoksayilanlar : atlananlar;
+    if (hedef.length >= RAPOR_MAKS) return;
+    hedef.push({ satir: String(satir).slice(0, 180), neden });
+  };
 
   const noktaliVirgul = satirListesi.filter((s) => s.includes(";")).length;
   if (noktaliVirgul >= 3) {
     const matris = satirListesi.map((s) => s.split(";").map((x) => x.trim()));
-    const hareketler = satirlardanHareketler(matris);
-    if (hareketler.length) return hareketler;
+    const ayrintili = satirlardanHareketlerAyrintili(matris);
+    if (ayrintili.hareketler.length) return ayrintili;
   }
 
   const hareketler = [];
-  for (const satir of satirListesi) {
+  const tuketilen = new Set(); // bir önceki satıra eklenen (tutar) satırlar
+
+  for (let s = 0; s < satirListesi.length; s++) {
+    if (tuketilen.has(s)) continue;
+
     // Tarih önce ayıklanır; yoksa "10.09" parçası tutar sanılır.
-    const tarihEsles = satir.match(TARIH_RE);
-    const kalanMetin = tarihEsles ? satir.replace(tarihEsles[0], " ") : satir;
-    const tarih = tarihEsles ? tarihCoz(tarihEsles[0]) : "";
+    const ilkParca = satirdanTarih(satirListesi[s]);
+    const tarih = ilkParca.tarih;
+    // NOT: Binlik ayracı boşluk olabilir ("30 000,00"); bu düzeltme token
+    // üretimi sırasında yapılır (bkz. tokenlereAyir).
+    let kalanMetin = ilkParca.kalan;
+    let tokenler = tokenlereAyir(kalanMetin);
 
-    const paraEslesmeleri = kalanMetin.match(PARA_RE) || [];
-    const adaylar = paraEslesmeleri
-      .map((p) => ({ p, n: tutarCoz(p) }))
-      .filter((x) => x.n !== null && Math.abs(x.n) > 0);
-    if (!adaylar.length) continue;
+    // "Tarih | Fiş No | Açıklama | Tutar | Bakiye" düzeninde tarihten hemen
+    // sonra gelen çıplak tamsayı fiş numarasıdır: tutar sayılmaz ve açıklamaya
+    // karışmaz. Karıştığında hem tutar hem kişi/taşınmaz eşleşmesi bozulur.
+    const fisIndeksi =
+      tokenler.length > 1 &&
+      /^\d{3,}$/.test(tokenler[0]) &&
+      tokenler.slice(1).some((t) => !metinTutarHucresiMi(t))
+        ? 0
+        : -1;
+    const haric = fisIndeksi >= 0 ? new Set([fisIndeksi]) : new Set();
+    let secilen = metinTutarAdaylari(tokenler, haric);
 
-    const gucluler = adaylar.filter((x) => gucluTutar(x.p));
-    const kullanilan = gucluler.length ? gucluler : adaylar;
-
-    // Yalnızca tutar olarak kabul edilen parçalar açıklamadan çıkarılır;
-    // zayıf adaylar (adres içindeki "27" gibi) açıklamada kalır.
-    let aciklama = kalanMetin;
-    for (const x of kullanilan) {
-      const idx = aciklama.indexOf(x.p);
-      if (idx >= 0) aciklama = aciklama.slice(0, idx) + " " + aciklama.slice(idx + x.p.length);
+    // Taranmış ekstrelerde uzun açıklama alta taşıp tutar/bakiye kendi
+    // satırında kalabilir; tutarsız kalan satır atılmak yerine birleştirilir.
+    if (!secilen.length && s + 1 < satirListesi.length) {
+      const sonraki = satirListesi[s + 1];
+      if (!tuketilen.has(s + 1) && !satirdanTarih(sonraki).tarih && tutarSatiriMi(sonraki)) {
+        const birlesik = kalanMetin + " " + sonraki;
+        const birlesikTokenler = tokenlereAyir(birlesik);
+        const birlesikSecilen = metinTutarAdaylari(birlesikTokenler, haric);
+        if (birlesikSecilen.length) {
+          kalanMetin = birlesik;
+          tokenler = birlesikTokenler;
+          secilen = birlesikSecilen;
+          tuketilen.add(s + 1);
+        }
+      }
     }
-    aciklama = aciklama.replace(/\s{2,}/g, " ").trim();
-    if (!aciklama) continue;
-    if (TOPLAM_RE.test(trSadelestir(aciklama).trim())) continue;
+    if (!secilen.length) {
+      // Tarih ya da rakam taşıyan satır bir hareket olmalıydı; sessizce
+      // kaybolmasın diye raporlanır (başlık/toplam satırları ayrı sayılır).
+      if (tarih || /\d/.test(satirListesi[s])) {
+        const { neden, yoksay } = metinAtlanmaNedeni(satirListesi[s], tarih);
+        ekle(satirListesi[s], neden, yoksay);
+      }
+      continue;
+    }
 
+    // Yalnızca tutar/bakiye olarak kabul edilen parçalar açıklamadan çıkarılır;
+    // zayıf adaylar (adres içindeki "27" gibi) açıklamada kalır.
+    const atilan = new Set(secilen.map((x) => x.i));
+    if (fisIndeksi >= 0) atilan.add(fisIndeksi);
+    const aciklama = tokenler
+      .filter((_, i) => !atilan.has(i))
+      .join(" ")
+      .trim();
+    if (!aciklama) {
+      ekle(satirListesi[s], "Açıklama okunamadı", false);
+      continue;
+    }
+    if (TOPLAM_RE.test(trSadelestir(aciklama).trim())) {
+      ekle(satirListesi[s], "Toplam/bakiye satırı", true);
+      continue;
+    }
+    // Tarihsiz + başlık/altlık gibi görünen satır (IBAN, "Sayfa Sonu Bakiye")
+    // hareket değildir; tutarı ödeme sanılmasın.
+    if (!tarih && GURULTU_RE.test(trSadelestir(aciklama))) {
+      ekle(satirListesi[s], "Ekstre başlığı/altlığı", true);
+      continue;
+    }
+
+    const birincil = secilen[0];
     const cikis =
-      /^\s*[-+(]/.test(kullanilan[0].p) ||
+      birincil.n < 0 ||
+      /^[-+(]/.test(birincil.ham) ||
       /\b(borc|giden|cikan|havale giden|odeme talimati)\b/.test(trSadelestir(kalanMetin));
 
     hareketler.push({
       tarih,
       aciklama,
-      tutar: Math.abs(kullanilan[0].n),
-      tutarlar: kullanilan.map((x) => Math.abs(x.n)),
+      tutar: Math.abs(birincil.n),
+      tutarlar: secilen.map((x) => Math.abs(x.n)),
       yon: cikis ? "cikis" : "giris",
-      satir
+      satir: satirListesi[s]
     });
   }
-  return hareketler;
+  return { hareketler, atlananlar, yoksayilanlar };
 }
 
 /* --------------------------------------------------------- eşleştirme ---- */
