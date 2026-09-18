@@ -35,6 +35,128 @@ import * as pdfjsLib from "pdfjs-dist";
 const workerUrl = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url);
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.href;
 
+import {
+  trSadelestir,
+  sozlesmeAlanlariniCikar,
+  bulunanEtiketler,
+  OCR_BULUNAN_ANAHTARLAR
+} from "./contractParser.mjs";
+
+/* -------------------------------------------------------------------------
+   KİRA SÖZLEŞMESİ OKUMA (metin katmanı + Tesseract OCR yedeği)
+   -------------------------------------------------------------------------
+   İki aşamalı çalışır:
+   1) PDF'de gömülü metin katmanı varsa doğrudan okunur (hızlı ve hatasız).
+   2) Metin katmanı yoksa (taranmış / fotoğrafla çekilmiş PDF) sayfalar
+      canvas'a çizilip Tesseract ile Türkçe OCR yapılır.
+   Alan çıkarımı saf ve test edilebilir olması için contractParser.mjs içindedir.
+------------------------------------------------------------------------- */
+
+const OCR_DILI = "tur+eng"; // Sayı ve IBAN için İngilizce de devrede
+const OCR_MAKS_SAYFA = 4;   // Sözleşme formu ilk sayfalarda yer alır
+const OCR_OLCEK = 2;        // 2x render OCR doğruluğunu belirgin artırır
+
+const pdfSayfaMetni = async (pdf) => {
+  let metin = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const sayfa = await pdf.getPage(i);
+    const icerik = await sayfa.getTextContent();
+    metin += icerik.items.map((it) => it.str).join(" ") + "\n";
+  }
+  return metin;
+};
+
+const pdfSayfaGoruntusu = async (pdf, sayfaNo, olcek) => {
+  const sayfa = await pdf.getPage(sayfaNo);
+  const viewport = sayfa.getViewport({ scale: olcek });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await sayfa.render({ canvasContext: ctx, viewport }).promise;
+  return canvas;
+};
+
+// Tesseract motoru ağırdır; yalnızca gerçekten gerektiğinde (taranmış belge)
+// yüklenir ve dosyalar arasında yeniden kullanılır.
+let ocrWorkerPromise = null;
+let ocrIlerlemeGeriCagri = null;
+let ocrAktifSayfa = null;
+
+const ocrWorkerAl = async (ilerleme) => {
+  ocrIlerlemeGeriCagri = ilerleme || null;
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      const { createWorker } = await import("tesseract.js");
+      return createWorker(OCR_DILI, 1, {
+        logger: (m) => {
+          if (!ocrIlerlemeGeriCagri) return;
+          if (m.status === "recognizing text") {
+            const oran = typeof m.progress === "number" ? m.progress : 0;
+            const genel = ocrAktifSayfa
+              ? (ocrAktifSayfa.i - 1 + oran) / ocrAktifSayfa.toplam
+              : oran;
+            ocrIlerlemeGeriCagri(genel, `Sayfa ${ocrAktifSayfa?.i || 1}/${ocrAktifSayfa?.toplam || 1} okunuyor`);
+          } else if (typeof m.progress === "number" && m.progress < 1) {
+            ocrIlerlemeGeriCagri(m.progress * 0.09, "OCR motoru hazırlanıyor");
+          }
+        }
+      });
+    })().catch((e) => {
+      ocrWorkerPromise = null;
+      throw e;
+    });
+  }
+  return ocrWorkerPromise;
+};
+
+const sozlesmeMetniniAl = async (dosya, ilerleme) => {
+  if (dosya.type && dosya.type.startsWith("image/")) {
+    const worker = await ocrWorkerAl(ilerleme);
+    ocrAktifSayfa = { i: 1, toplam: 1 };
+    const { data } = await worker.recognize(dosya);
+    ocrAktifSayfa = null;
+    return { metin: (data && data.text) || "", kaynak: "ocr", sayfaSayisi: 1 };
+  }
+
+  const veri = new Uint8Array(await dosya.arrayBuffer());
+  const pdf = await pdfjsLib.getDocument({ data: veri }).promise;
+  let metin = await pdfSayfaMetni(pdf);
+
+  if (trSadelestir(metin).replace(/\s/g, "").length >= 200) {
+    return { metin, kaynak: "metin", sayfaSayisi: pdf.numPages };
+  }
+
+  // Metin katmanı yok: taranmış belge, sayfaları OCR'dan geçir.
+  const toplam = Math.min(pdf.numPages, OCR_MAKS_SAYFA);
+  let worker;
+  try {
+    worker = await ocrWorkerAl(ilerleme);
+  } catch (e) {
+    throw new Error(
+      "OCR motoru yüklenemedi (internet bağlantısı gerekir): " +
+        (e && e.message ? e.message : String(e))
+    );
+  }
+  let ocrMetni = "";
+  for (let i = 1; i <= toplam; i++) {
+    ocrAktifSayfa = { i, toplam };
+    if (ilerleme) ilerleme((i - 1) / toplam, `Sayfa ${i}/${toplam} taranıyor`);
+    const canvas = await pdfSayfaGoruntusu(pdf, i, OCR_OLCEK);
+    try {
+      const { data } = await worker.recognize(canvas);
+      ocrMetni += ((data && data.text) || "") + "\n";
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+  ocrAktifSayfa = null;
+  return { metin: `${metin}\n${ocrMetni}`.trim(), kaynak: "ocr", sayfaSayisi: pdf.numPages };
+};
+
 // NOT: Supabase Dashboard -> Project Settings -> API kısmından aldığınız yeni anon key'inizi buraya girin.
 const SUPABASE_URL = "https://bsajwcplambqjhitwkew.supabase.co";
 const SUPABASE_ANON_KEY =
@@ -719,41 +841,58 @@ export default function App() {
     }
   ]);
   
-  const extractSözleşmeVerileri = async (pdfFile) => {
-    const arrayBuffer = await pdfFile.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let metin = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const sayfa = await pdf.getPage(i);
-      const içerik = await sayfa.getTextContent();
-      metin += içerik.items.map((item) => item.str).join(" ") + "\n";
+  const extractSözleşmeVerileri = async (dosya, ilerleme) => {
+    const { metin, kaynak, sayfaSayisi } = await sozlesmeMetniniAl(dosya, ilerleme);
+    const alanlar = sozlesmeAlanlariniCikar(metin, { dosyaAdi: dosya.name });
+    const doluAlan = OCR_BULUNAN_ANAHTARLAR.filter((k) => alanlar[k]);
+    if (doluAlan.length === 0) {
+      const taninan = bulunanEtiketler(metin).length;
+      throw new Error(
+        taninan === 0
+          ? "Belge kira sözleşmesi şablonuna benzemiyor: form başlıklarından hiçbiri tanınamadı.\n\n" +
+            (kaynak === "ocr"
+              ? "Tarama çok soluk veya eğik olabilir; belgeyi düz ve net biçimde yeniden tarayın."
+              : "Yanlış dosya seçilmiş olabilir.")
+          : `Belgenin şablonu tanındı (${taninan} başlık) ancak alan değerleri okunamadı. ` +
+            "Bölümlerin boş bırakılmadığından emin olun."
+      );
     }
-    console.log("[PDF Metni]", metin.slice(0, 5000));
-    try { localStorage.setItem("pdf_extract_debug", metin.slice(0, 50000)); } catch(e) { console.error("Debug kaydedilemedi:", e); }
-    if (!metin || metin.trim().length < 100) {
-      throw new Error("PDF'de metin katmanı bulunamadı (taranmış/scan PDF olabilir). Gerçek OCR (Tesseract, Google Vision, Azure AI) gerekir.");
+    return { ...alanlar, kaynak, sayfaSayisi, doluAlan };
+  };
+
+  // Bir kuyruk kaydının ilerleme/sonuç alanlarını güncelleyen ortak yardımcı.
+  const kuyrukGuncelle = (id, degisiklik) =>
+    setPdfQueue((prev) => prev.map((q) => (q.id === id ? { ...q, ...degisiklik } : q)));
+
+  const dosyayiIsle = async (item) => {
+    // OCR motoru ilk kullanımda dil verisini indirir; varsa yüzdeyi göster.
+    const ilerleme = (oran, mesaj) => {
+      const yuzde = typeof oran === "number" ? Math.round(oran * 100) : null;
+      kuyrukGuncelle(item.id, {
+        progress: yuzde,
+        progressText: yuzde !== null && yuzde > 0 ? `${mesaj} (%${yuzde})` : mesaj
+      });
+    };
+    try {
+      const veriler = await extractSözleşmeVerileri(item.file, ilerleme);
+      kuyrukGuncelle(item.id, {
+        status: "Tamamlandı",
+        tenant: veriler.kiraciAdi || "(Kiracı adı okunamadı)",
+        error: null,
+        extractedData: veriler,
+        rawText: (veriler.metin || "").slice(0, 20000),
+        progress: 100,
+        progressText: veriler.kaynak === "ocr" ? "OCR ile okundu" : "Metin katmanından okundu"
+      });
+    } catch (hata) {
+      kuyrukGuncelle(item.id, {
+        status: "Hata",
+        tenant: "",
+        progress: null,
+        progressText: null,
+        error: hata && hata.message ? hata.message : "Belge işlenirken hata oluştu."
+      });
     }
-    const sonuclar = {};
-    const kiraciMatch = metin.match(/Kiracının Ad[ıi] Soyad[ıi]\/? T\.C\. Kimlik No\.([^a-zA-Z0-9]|$)/);
-    if (kiraciMatch) {
-      sonuclar.kiraciAdi = kiraciMatch[1] ? kiraciMatch[1].trim().slice(0, 80) : "";
-    }
-    const kiraMatch = metin.match(/Bir Aylık Kira Karşılığı[^a-zA-Z0-9]*([\d\s\.]+)\s*(TL)?/);
-    if (kiraMatch) {
-      sonuclar.kiraBedeli = kiraMatch[1].replace(/\s/g, "").replace("TL", "");
-    }
-    const tarihMatch = metin.match(/Kiran[ınI]n Baslang[ıi]ç[ıi][^a-zA-Z0-9]*(.+)/);      if (tarihMatch) {
-      sonuclar.kiraBaslangic = tarihMatch[1] ? tarihMatch[1].trim().slice(0, 50) : "";
-    }
-    const ibanMatch = metin.match(/Kiran[ınI]n Ödenece[ğG]e Banka Ad[ıI] ve IBAN\s*numaras[ıi][^a-zA-Z0-9]*([\s\d\w]+)/);
-    if (ibanMatch) {
-      sonuclar.iban = ibanMatch[1] ? ibanMatch[1].replace(/\s/g, "").slice(0, 50) : "";
-    }
-    const depozitoMatch = metin.match(/Kirac[ıI] depozito olarak\s*(\d+)\s*aylık kira bedelini/s);
-    if (depozitoMatch) {
-      sonuclar.depozitoAylik = depozitoMatch[1];
-    }
-    return Object.keys(sonuclar).length > 0 ? sonuclar : null;
   };
 
   const handleFileUpload = async (files) => {
@@ -765,39 +904,15 @@ export default function App() {
       tenant: "",
       error: null,
       extractedData: null,
+      rawText: null,
+      progress: null,
+      progressText: "Belge hazırlanıyor...",
       file: file
     }));
     setPdfQueue((prev) => [...prev, ...newItems]);
+    // Dosyalar sırayla işlenir; OCR ağır olduğu için paralel çalıştırmıyoruz.
     for (const item of newItems) {
-      try {
-        const veriler = await extractSözleşmeVerileri(item.file);
-        setPdfQueue((prev) =>
-          prev.map((q) =>
-            q.id === item.id
-              ? {
-                  ...q,
-                  status: veriler ? "Tamamlandı" : "Hata",
-                  tenant: veriler?.kiraciAdi || "(Kiracı adı bulunamadı)",
-                  error: veriler ? null : "PDF'den gerekli alanlar başarıyla okunamadı.",
-                  extractedData: veriler
-                }
-              : q
-          )
-        );
-      } catch (hata) {
-        setPdfQueue((prev) =>
-          prev.map((q) =>
-            q.id === item.id
-              ? {
-                  ...q,
-                  status: "Hata",
-                  tenant: "",
-                  error: hata && hata.message ? hata.message : "PDF işlenirken hata oluştu."
-                }
-              : q
-          )
-        );
-      }
+      await dosyayiIsle(item);
     }
   };
 
@@ -810,40 +925,15 @@ export default function App() {
   const handleRetry = async (id) => {
     const item = pdfQueue.find((q) => q.id === id);
     if (!item || !item.file) return;
-    setPdfQueue((prev) =>
-      prev.map((q) =>
-        q.id === id ? { ...q, status: "İşleniyor", error: null, extractedData: null } : q
-      )
-    );
-    try {
-      const veriler = await extractSözleşmeVerileri(item.file);
-      setPdfQueue((prev) =>
-        prev.map((q) =>
-          q.id === id
-            ? {
-                ...q,
-                status: veriler ? "Tamamlandı" : "Hata",
-                tenant: veriler?.kiraciAdi || "(Kiracı adı bulunamadı)",
-                error: veriler ? null : "PDF'den gerekli alanlar tekrar okunamadı.",
-                extractedData: veriler
-              }
-            : q
-        )
-      );
-    } catch (hata) {
-      setPdfQueue((prev) =>
-        prev.map((q) =>
-          q.id === id
-            ? {
-                ...q,
-                status: "Hata",
-                tenant: "",
-                error: hata && hata.message ? hata.message : "PDF işlenirken hata oluştu."
-              }
-            : q
-        )
-      );
-    }
+    kuyrukGuncelle(id, {
+      status: "İşleniyor",
+      error: null,
+      extractedData: null,
+      rawText: null,
+      progress: null,
+      progressText: "Belge hazırlanıyor..."
+    });
+    await dosyayiIsle(item);
   };
 
   const handleActionStartContract = () => {
@@ -922,37 +1012,62 @@ export default function App() {
   };
   
   const handleTransferToForm = (item) => {
-    if (item.extractedData) {
-      const d = item.extractedData;
-      setContractScanForm({
-        tasinmazNo: d.tahsilNo || "",
-        propertyAd: "Sözleşmeden Taranan Mülk",
-        ilce: "",
-        landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-        tenantName: d.kiraciAdi || "",
-        tenantTc: "",
-        tenantAddress: "",
-        rentAmount: d.kiraBedeli || "",
-        startDate: d.kiraBaslangic || new Date().toISOString().split("T")[0],
-        docUrl: null
-      });
-    } else {
-      setContractScanForm({
-        tasinmazNo: `hasyek.${Math.floor(Math.random() * 89 + 10)}.${Math.floor(Math.random() * 89 + 10)}`,
-        propertyAd: "Lüks Daire (OCR Taranan)",
-        ilce: "İstanbul / Ataşehir",
-        landlordName: "HAS YEK YAPI A.Ş.",
-        tenantName: "Örnek Kiracı",
-        tenantPhone: "0532 555 4433",
-        tenantTc: "12345678901",
-        tenantAddress: "Ataşehir, İstanbul",
-        rentAmount: "25000",
-        startDate: new Date().toISOString().split("T")[0],
-        docUrl: null
-      });
+    const d = item?.extractedData;
+    if (!d) {
+      alert("Bu dosyadan okunmuş veri bulunmuyor. Önce belgeyi tarayın.");
+      return;
     }
+
+    // Taşınmaz numarası zorunlu olduğu için sırasıyla: "C Blok 27" gibi
+    // blok+daire, ada/parsel.daire, yoksa dosya adı ("C blok 27.pdf").
+    const daire = d.daireNo ? `Daire ${d.daireNo}` : "";
+    const tasinmazNo =
+      d.blokDaire ||
+      [d.adaParsel, d.daireNo].filter(Boolean).join(".") ||
+      (item.name || "").replace(/\.(pdf|jpe?g|png)$/i, "").trim();
+
+    setContractScanForm({
+      tasinmazNo,
+      propertyAd: [d.cins, daire].filter(Boolean).join(" · ") || "Sözleşmeden Taranan Mülk",
+      ilce: d.ilIlce || d.mahalle || "",
+      landlordName: d.malikAdi || contractScanForm.landlordName || "",
+      tenantName: d.kiraciAdi || "",
+      tenantPhone: (d.kiraciTel || "").split(/[-/]/)[0].trim(),
+      tenantTc: d.kiraciTc || "",
+      tenantAddress: d.kiraciAdres || "",
+      rentAmount: d.kiraBedeli || d.aylikKira || "",
+      startDate: d.kiraBaslangic || new Date().toISOString().split("T")[0],
+      docUrl: null
+    });
     window.scrollTo({ top: 0, behavior: "smooth" });
-    alert(`"${item.name}" dosyasından başarıyla okunan veriler form kutucuklarına aktarıldı!`);
+
+    const eksik = [];
+    if (!d.kiraciAdi) eksik.push("kiracı adı");
+    if (!d.kiraciTc) eksik.push("T.C. kimlik no");
+    if (!d.aylikKira) eksik.push("aylık kira bedeli");
+    if (!d.kiraBaslangic) eksik.push("akdin başlangıç tarihi");
+    if (!d.kiraciAdres) eksik.push("kiracı adresi");
+
+    const ozet = [
+      d.kiraciAdi && `Kiracı: ${d.kiraciAdi}`,
+      d.kiraciTc && `T.C.: ${d.kiraciTc}`,
+      d.aylikKira && `Aylık kira: ${d.aylikKira} ₺`,
+      d.yillikKira && `Yıllık kira: ${d.yillikKira} ₺`,
+      d.kiraBaslangic && `Başlangıç: ${d.kiraBaslangic}`,
+      d.iban && `IBAN: ${d.iban}`,
+      d.depozitoTutar && `Depozito: ${d.depozitoTutar} ₺`,
+      d.odemeGunu && `Ödeme günü: her ayın ${d.odemeGunu}. günü`
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    alert(
+      `"${item.name}" dosyasından okunan veriler forma aktarıldı.\n\n${ozet}` +
+        (eksik.length ? `\n\nOkunamayan alanları elle tamamlayın: ${eksik.join(", ")}.` : "") +
+        (d.kaynak === "ocr"
+          ? "\n\n(Kaynak: OCR — taranmış belge. Tutar ve numaraları kontrol edin.)"
+          : "\n\n(Kaynak: PDF metin katmanı)")
+    );
   };
 
   // --- Oturum ve hesap yönetimi -------------------------------------------
@@ -6017,7 +6132,7 @@ export default function App() {
               <input
                 type="file"
                 multiple
-                accept=".pdf"
+                accept=".pdf,image/*"
                 style={{ display: "none" }}
                 onChange={(e) => {
                   if (e.target.files) handleFileUpload(e.target.files);
@@ -6047,7 +6162,7 @@ export default function App() {
               Kira Kontratı PDF'lerini Buraya Sürükleyin veya Dosya Seçin
             </div>
             <div className="muted small">
-              Birden fazla PDF seçebilirsiniz · Sırayla otomatik işlenir · Supabase Storage'a arşivlenir
+              Birden fazla PDF veya fotoğraf seçebilirsiniz · Taranmış belgeler OCR ile okunur · Sırayla otomatik işlenir
             </div>
           </div>
 
@@ -6101,12 +6216,51 @@ export default function App() {
                   </div>
                   <div className="muted small" style={{ marginBottom: 8 }}>
                     {item.size || "1024 KB"} {item.tenant ? `· Kiracı: ${item.tenant}` : ""}
+                    {item.extractedData
+                      ? item.extractedData.kaynak === "ocr"
+                        ? " · OCR ile okundu"
+                        : " · Metin katmanından okundu"
+                      : ""}
                   </div>
 
-                  {item.error && (
-                    <div style={{ background: "#FEF2F2", border: "1px solid #FEE2E2", color: "#991B1B", padding: 8, borderRadius: 8, fontSize: "11.5px", fontFamily: "monospace", marginBottom: 10 }}>
-                      {`{"error":{"code":503,"message":"${item.error}","status":"UNAVAILABLE"}}`}
+                  {item.extractedData && (
+                    <div className="muted small" style={{ marginBottom: 8, lineHeight: 1.6 }}>
+                      {item.extractedData.blokDaire ? `${item.extractedData.blokDaire} · ` : ""}
+                      {item.extractedData.aylikKira ? `Kira: ${item.extractedData.aylikKira} ₺ · ` : ""}
+                      {item.extractedData.kiraBaslangic ? `Başlangıç: ${item.extractedData.kiraBaslangic} · ` : ""}
+                      {item.extractedData.kiraciTc ? `T.C.: ${item.extractedData.kiraciTc}` : ""}
                     </div>
+                  )}
+
+                  {item.error && (
+                    <div style={{ background: "#FEF2F2", border: "1px solid #FEE2E2", color: "#991B1B", padding: 8, borderRadius: 8, fontSize: "11.5px", marginBottom: 10 }}>
+                      {item.error}
+                    </div>
+                  )}
+
+                  {item.rawText && (
+                    <details style={{ marginBottom: 10 }}>
+                      <summary className="muted small" style={{ cursor: "pointer" }}>
+                        Belgeden okunan metni göster
+                      </summary>
+                      <pre
+                        style={{
+                          maxHeight: 200,
+                          overflow: "auto",
+                          fontSize: 10.5,
+                          lineHeight: 1.5,
+                          background: "#F9FAFB",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                          padding: 8,
+                          marginTop: 6,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word"
+                        }}
+                      >
+                        {item.rawText}
+                      </pre>
+                    </details>
                   )}
 
                   <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -6128,7 +6282,9 @@ export default function App() {
                       </button>
                     )}
                     {item.status === "İşleniyor" && (
-                      <span className="muted small" style={{ fontStyle: "italic" }}>Yapay zeka tarıyor...</span>
+                      <span className="muted small" style={{ fontStyle: "italic" }}>
+                        {item.progressText || "Belge taranıyor..."}
+                      </span>
                     )}
                   </div>
                 </div>

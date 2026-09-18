@@ -3,3 +3,6 @@ dist
 release
 .DS_Store
 .freebuff/
+
+# Tesseract dil verisi (teşhis aracı indirir)
+*.traineddata
