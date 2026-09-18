@@ -41,6 +41,19 @@ import {
   bulunanEtiketler,
   OCR_BULUNAN_ANAHTARLAR
 } from "./contractParser.mjs";
+import { xlsxSatirlariniOku } from "./xlsxLite.mjs";
+import {
+  metindenHareketler,
+  satirlardanHareketler,
+  eslesmeleriBul
+} from "./statementParser.mjs";
+
+import { kiraTakvimi, vadeTarihi, SENET_SAYISI, KIRA_AYI } from "./leaseSchedule.mjs";
+
+const isoTarih = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 
 /* -------------------------------------------------------------------------
    KİRA SÖZLEŞMESİ OKUMA (metin katmanı + Tesseract OCR yedeği)
@@ -763,8 +776,12 @@ export default function App() {
   const [filter, setFilter] = useState("tum");
   const [contractScanForm, setContractScanForm] = useState({
     tasinmazNo: "", propertyAd: "", ilce: "", landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
-    tenantName: "", tenantPhone: "", tenantTc: "", tenantAddress: "", rentAmount: "", startDate: "", docUrl: null
+    tenantName: "", tenantPhone: "", tenantTc: "", tenantAddress: "", rentAmount: "", startDate: "",
+    odemeGunu: "", deposit: "", docUrl: null
   });
+  // En son başlatılan sözleşme: "Borçlandır"/"Senet oluştur" düğmeleri form
+  // doldurulmadan da bu sözleşme üzerinde çalışabilsin.
+  const [sonSozlesmeId, setSonSozlesmeId] = useState(null);
   const [people, setPeople] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -775,6 +792,7 @@ export default function App() {
   const [bankStatements, setBankStatements] = useState([]);
   const [yuklenenEkstre, setYuklenenEkstre] = useState(null);
   const [islemDurumu, setIslemDurumu] = useState("");
+  const [ekstreIsleniyor, setEkstreIsleniyor] = useState(false);
   const [bankIntegrations, setBankIntegrations] = useState([]);
   const [accountingData, setAccountingData] = useState({
     product: "Logo Yazılım",
@@ -936,9 +954,102 @@ export default function App() {
     await dosyayiIsle(item);
   };
 
+  // Formdaki taşınmazın aktif sözleşmesini, yoksa en son başlatılan sözleşmeyi bulur.
+  const formSozlesmesi = (contractId) => {
+    if (contractId) return contracts.find((c) => c.id === contractId) || null;
+    const anahtar = trSadelestir(contractScanForm.tasinmazNo || "").trim();
+    const mulk = anahtar
+      ? properties.find((p) => trSadelestir(p.tasinmazNo || "").trim() === anahtar)
+      : null;
+    const aktif = mulk ? contracts.find((c) => c.propertyId === mulk.id && c.status === "Aktif") : null;
+    return aktif || contracts.find((c) => c.id === sonSozlesmeId) || null;
+  };
+
+  // Sözleşme için eksik taksitleri ve senetleri üretir; var olanı tekrarlamaz,
+  // böylece düğmeye birden fazla basmak kayıt çoğaltmaz. Takvim hesabı
+  // src/leaseSchedule.mjs içinde (testli) tutulur.
+  const borcVeSenetOlustur = (sozlesme, secenekler = {}) => {
+    const { borc = true, senet = true } = secenekler;
+    if (!sozlesme) return { taksit: 0, senet: 0 };
+    const kira = Number(sozlesme.rentAmount) || 0;
+    if (!kira) return { taksit: 0, senet: 0 };
+
+    const baslangic = sozlesme.startDate ? new Date(sozlesme.startDate) : new Date();
+    const mevcutTaksitler = payments.filter((p) => p.contractId === sozlesme.id);
+    const mevcutSenetler = promissoryNotes.filter((n) => n.contractId === sozlesme.id);
+    const mulk = properties.find((p) => p.id === sozlesme.propertyId);
+    const kisi = people.find((p) => p.id === sozlesme.tenantId);
+
+    const takvim = kiraTakvimi({
+      baslangic,
+      odemeGunu: sozlesme.paymentDay,
+      kira,
+      mevcutVadeler: mevcutTaksitler.map((p) => p.dueDate),
+      senetSayisi: Number(sozlesme.senetSayisi) || SENET_SAYISI,
+      senetBaslangicNo: mevcutSenetler.length + 1
+    });
+
+    // Takvimdeki her ay için kayıt üretilir; senet, aynı vadeli taksite bağlanır.
+    const yeniTaksitler = (borc ? takvim.taksitler : []).map((t) => ({
+      id: uid(),
+      contractId: sozlesme.id,
+      amount: t.amount,
+      dueDate: t.dueDate,
+      paidAmount: 0,
+      paidDate: null,
+      tur: t.tur
+    }));
+    const vadeTaksit = new Map(yeniTaksitler.map((t) => [t.dueDate, t.id]));
+    const yeniSenetler = (senet ? takvim.senetler : []).map((s) => ({
+      id: uid(),
+      contractId: sozlesme.id,
+      tenantId: sozlesme.tenantId,
+      tenantName: (kisi && kisi.name) || "Kiracı",
+      propertyId: sozlesme.propertyId,
+      mulkAdi: (mulk && (mulk.tasinmazNo || mulk.ad)) || "",
+      senetNo: s.senetNo,
+      dueDate: s.dueDate,
+      amount: s.amount,
+      status: "Ödenmedi (Senet)",
+      // Senet, aynı vadeli taksitle eşleştirilir (varsa eski kayıtla da).
+      paymentId:
+        vadeTaksit.get(s.dueDate) ||
+        ((mevcutTaksitler.find((p) => p.dueDate === s.dueDate) || {}).id || "")
+    }));
+
+    if (yeniTaksitler.length) {
+      persist(STORAGE_KEYS.payments, [...payments, ...yeniTaksitler], setPayments);
+    }
+    if (yeniSenetler.length) {
+      saveNotes([...yeniSenetler, ...promissoryNotes]);
+    }
+    return { taksit: yeniTaksitler.length, senet: yeniSenetler.length };
+  };
+
+  // Sözleşmeyi başlatır: mülk + kiracı + sözleşme kaydı, ardından 12 aylık borç
+  // (1 peşin + 11 senetli taksit) ve 11 senet.
   const handleActionStartContract = () => {
     if (!contractScanForm.tasinmazNo || !contractScanForm.tenantName) {
       alert("Lütfen taşınmaz numarası ve kiracı adını doldurun!");
+      return false;
+    }
+    const kira = Number(contractScanForm.rentAmount) || 0;
+    if (!kira) {
+      alert("Aylık kira bedeli girilmeden sözleşme borçlandırılamaz.");
+      return false;
+    }
+    const ayniMulk = properties.find(
+      (p) =>
+        trSadelestir(p.tasinmazNo || "").trim() === trSadelestir(contractScanForm.tasinmazNo).trim()
+    );
+    const varOlan = ayniMulk
+      ? contracts.find((c) => c.propertyId === ayniMulk.id && c.status === "Aktif")
+      : null;
+    if (varOlan) {
+      alert(
+        `"${contractScanForm.tasinmazNo}" için zaten aktif bir sözleşme var.\n\n` +
+          "Aynı taşınmazı iki kez borçlandırmamak için önce mevcut sözleşmeyi sonlandırın."
+      );
       return false;
     }
 
@@ -950,8 +1061,9 @@ export default function App() {
       tasinmazNo: contractScanForm.tasinmazNo,
       ad: contractScanForm.propertyAd || "Yeni Mülk",
       ilce: contractScanForm.ilce || "Merkez",
+      landlordName: contractScanForm.landlordName || "",
       durum: "Dolu",
-      kiraBedeli: Number(contractScanForm.rentAmount) || 0,
+      kiraBedeli: kira,
       tenantName: contractScanForm.tenantName
     };
     saveProperty(newProp);
@@ -963,52 +1075,75 @@ export default function App() {
       tc: contractScanForm.tenantTc,
       address: contractScanForm.tenantAddress,
       propertyId: newPropertyId,
-      rentAmount: Number(contractScanForm.rentAmount) || 0,
+      rentAmount: kira,
       role: "Kiracı"
     };
     savePerson(newTen);
 
-    return newPropertyId;
+    const baslangic = contractScanForm.startDate ? new Date(contractScanForm.startDate) : new Date();
+    const odemeGunu =
+      Number((String(contractScanForm.odemeGunu || "").match(/\d{1,2}/) || [])[0]) || baslangic.getDate();
+
+    const sozlesme = {
+      id: uid(),
+      propertyId: newPropertyId,
+      tenantId: newTenantId,
+      startDate: isoTarih(baslangic),
+      endDate: vadeTarihi(baslangic, KIRA_AYI, baslangic.getDate()),
+      rentAmount: kira,
+      paymentDay: odemeGunu,
+      senetSayisi: SENET_SAYISI,
+      deposit: Number(contractScanForm.deposit) || 0,
+      status: "Aktif",
+      createdAt: new Date().toISOString()
+    };
+    saveContract(sozlesme);
+    setSonSozlesmeId(sozlesme.id);
+
+    const sonuc = borcVeSenetOlustur(sozlesme);
+
+    alert(
+      "Sözleşme başlatıldı ve kaydedildi.\n\n" +
+        `• Mülk: ${contractScanForm.tasinmazNo}\n` +
+        `• Kiracı: ${contractScanForm.tenantName}\n` +
+        `• Aylık kira: ${fmtMoney(kira)}\n` +
+        `• Borç: ${sonuc.taksit} ay (1 peşin + ${SENET_SAYISI - 1} taksit)\n` +
+        `• Senet: ${sonuc.senet} adet (ilk ay peşin, senet düzenlenmez)\n\n` +
+        "Bekleyen taksit ve senetleri Ödemeler & Muhasebe ile Senet Yönetimi bölümünden takip edebilirsiniz."
+    );
+    return sozlesme.id;
   };
 
-  const handleActionAutoDebit = (propertyId) => {
-    if (!propertyId) return;
-    const rentVal = Number(contractScanForm.rentAmount) || 15000;
-    const baseDate = contractScanForm.startDate ? new Date(contractScanForm.startDate) : new Date();
-    
-    const newPayments = [];
-    for (let i = 1; i <= 12; i++) {
-      const d = new Date(baseDate);
-      d.setMonth(d.getMonth() + i);
-      newPayments.push({
-        id: uid() + i,
-        propertyId: propertyId,
-        amount: rentVal,
-        dueDate: d.toISOString().split("T")[0],
-        status: "Bekliyor"
-      });
+  // Yalnızca eksik borçları tamamlar (sözleşmeyi yeniden oluşturmaz).
+  const handleActionAutoDebit = (contractId) => {
+    const sozlesme = formSozlesmesi(contractId);
+    if (!sozlesme) {
+      alert("Borçlandırma bir sözleşmeye bağlanır. Önce sözleşmeyi başlatın.");
+      return false;
     }
-    persist(STORAGE_KEYS.payments, [...payments, ...newPayments], setPayments);
+    const sonuc = borcVeSenetOlustur(sozlesme, { senet: false });
+    alert(
+      sonuc.taksit
+        ? `${sonuc.taksit} adet eksik taksit borcu oluşturuldu.`
+        : "Eksik taksit yok; borçlandırma güncel."
+    );
+    return true;
   };
 
-  const handleActionCreateNotes = () => {
-    const rentVal = Number(contractScanForm.rentAmount) || 15000;
-    const baseDate = contractScanForm.startDate ? new Date(contractScanForm.startDate) : new Date();
-
-    const newNotes = [];
-    for (let i = 1; i <= 12; i++) {
-      const d = new Date(baseDate);
-      d.setMonth(d.getMonth() + i);
-      newNotes.push({
-        id: uid() + i,
-        tenantName: contractScanForm.tenantName || "Kiracı",
-        senetNo: `SNT-2026-${String(i).padStart(3, "0")}`,
-        dueDate: d.toISOString().split("T")[0],
-        amount: rentVal,
-        status: "Ödenmedi (Senet)"
-      });
+  // Yalnızca eksik senetleri tamamlar.
+  const handleActionCreateNotes = (contractId) => {
+    const sozlesme = formSozlesmesi(contractId);
+    if (!sozlesme) {
+      alert("Senet takibi bir sözleşmeye bağlanır. Önce sözleşmeyi başlatın.");
+      return false;
     }
-    saveNotes([...newNotes, ...promissoryNotes]);
+    const sonuc = borcVeSenetOlustur(sozlesme, { borc: false });
+    alert(
+      sonuc.senet
+        ? `${sonuc.senet} adet senet oluşturuldu.`
+        : "Eksik senet yok; senet listesi güncel."
+    );
+    return true;
   };
   
   const handleTransferToForm = (item) => {
@@ -1037,6 +1172,8 @@ export default function App() {
       tenantAddress: d.kiraciAdres || "",
       rentAmount: d.kiraBedeli || d.aylikKira || "",
       startDate: d.kiraBaslangic || new Date().toISOString().split("T")[0],
+      odemeGunu: d.odemeGunu || "",
+      deposit: d.depozitoTutar || "",
       docUrl: null
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -6044,46 +6181,52 @@ export default function App() {
                   onChange={(e) => setContractScanForm({ ...contractScanForm, startDate: e.target.value })}
                 />
               </Field>
+              <Field label="Kiranın Ödeneceği Gün (ayın kaçı)">
+                <input
+                  type="number"
+                  min="1"
+                  max="28"
+                  value={contractScanForm.odemeGunu}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, odemeGunu: e.target.value })}
+                  placeholder="10"
+                />
+              </Field>
+              <Field label="Depozito (₺)">
+                <input
+                  type="number"
+                  value={contractScanForm.deposit}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, deposit: e.target.value })}
+                  placeholder="30000"
+                />
+              </Field>
 
               <div className="span-2" style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
-                <button
-                  className="hy-btn primary"
-                  onClick={() => {
-                    const cId = handleActionStartContract();
-                    if (cId !== false) alert("Sözleşme başarıyla başlatıldı, mülk ve kiracı kaydedildi!");
-                  }}
-                >
-                  <Check size={16} /> Sözleşmeyi Başlat
+                <button className="hy-btn primary" onClick={() => handleActionStartContract()}>
+                  <Check size={16} /> Sözleşmeyi Başlat & Borçlandır
                 </button>
 
                 <button
-                  className="hy-btn primary"
-                  style={{ background: "#2563EB", borderColor: "#2563EB" }}
-                  onClick={() => {
-                    const cId = handleActionStartContract();
-                    if (cId !== false) {
-                      handleActionAutoDebit(cId);
-                      alert("Sözleşme başlatıldı ve 12 aylık otomatik borçlandırma yapıldı!");
-                    }
-                  }}
+                  className="hy-btn"
+                  style={{ background: "#2563EB", borderColor: "#2563EB", color: "#fff" }}
+                  onClick={() => handleActionAutoDebit()}
                 >
-                  <FileText size={16} /> Otomatik Borçlandır
+                  <FileText size={16} /> Eksik Borçları Tamamla
                 </button>
 
                 <button
-                  className="hy-btn primary"
-                  style={{ background: "#059669", borderColor: "#059669" }}
-                  onClick={() => {
-                    const cId = handleActionStartContract();
-                    if (cId !== false) {
-                      handleActionCreateNotes();
-                      alert("Sözleşme başlatıldı ve 12 adet senet takibi oluşturuldu!");
-                    }
-                  }}
+                  className="hy-btn"
+                  style={{ background: "#059669", borderColor: "#059669", color: "#fff" }}
+                  onClick={() => handleActionCreateNotes()}
                 >
-                  <Receipt size={16} /> Senetleri Oluştur
+                  <Receipt size={16} /> Eksik Senetleri Oluştur
                 </button>
               </div>
+              <p className="muted small span-2" style={{ margin: 0 }}>
+                "Sözleşmeyi Başlat" tek adımda mülk, kiracı ve sözleşme kaydını oluşturur;
+                ardından {KIRA_AYI} aylık borcu (ilk ay peşin + {SENET_SAYISI} adet senetli taksit)
+                ve {SENET_SAYISI} senedi otomatik üretir. Diğer iki düğme yalnızca eksik kayıtları
+                tamamlar, var olanı çoğaltmaz.
+              </p>
             </div>
 
             <div style={{ background: "#f8f9fa", padding: 14, borderRadius: 12, border: "1px dashed var(--border)" }}>
@@ -6994,6 +7137,179 @@ export default function App() {
     );
   }
 
+  /* -------------------------------------------------- BANKA EKSTRESİ ----
+     Ekstre dosyası okunur (Excel / PDF / taranmış görüntü / CSV), hareketler
+     çıkarılır ve bekleyen taksit-senetlerle eşleştirilir. Kesin eşleşmeler
+     otomatik kapatılır; yalnızca tutarı uyuşanlar onay için listelenir. */
+  const ekstreHareketleriniOku = async (file) => {
+    const ad = (file.name || "").toLowerCase();
+    if (ad.endsWith(".xlsx")) {
+      const matris = await xlsxSatirlariniOku(await file.arrayBuffer());
+      return satirlardanHareketler(matris);
+    }
+    if (ad.endsWith(".xls")) {
+      throw new Error("Eski .xls biçimi okunamıyor; dosyayı .xlsx olarak kaydedip tekrar deneyin.");
+    }
+    if (ad.endsWith(".csv") || ad.endsWith(".txt")) {
+      return metindenHareketler(await file.text());
+    }
+    if (ad.endsWith(".html") || ad.endsWith(".htm")) {
+      const html = await file.text();
+      return metindenHareketler(html.replace(/<[^>]+>/g, " "));
+    }
+    const { metin } = await sozlesmeMetniniAl(file, (oran, mesaj) =>
+      setIslemDurumu(mesaj ? `${mesaj}...` : "Belge okunuyor...")
+    );
+    return metindenHareketler(metin);
+  };
+
+  // Eşleşen hareketleri kayıtlara işler: taksit ödendi, senet alındı olur.
+  // Bir senet taksitle bağlıysa ikisi birlikte kapanır.
+  const eslesmeleriIsle = (uygulanacak, mevcutTaksitler, mevcutSenetler) => {
+    let taksitler = mevcutTaksitler;
+    let senetler = mevcutSenetler;
+    for (const u of uygulanacak) {
+      const tarih = u.tarih || isoTarih(new Date());
+      if (u.tur === "odeme") {
+        taksitler = taksitler.map((p) =>
+          p.id === u.id ? { ...p, paidAmount: Number(p.amount) || 0, paidDate: tarih } : p
+        );
+        senetler = senetler.map((n) =>
+          n.paymentId === u.id ? { ...n, status: "Ödendi (Senet)" } : n
+        );
+      } else if (u.tur === "senet") {
+        const senet = senetler.find((n) => n.id === u.id);
+        senetler = senetler.map((n) => (n.id === u.id ? { ...n, status: "Ödendi (Senet)" } : n));
+        if (senet && senet.paymentId) {
+          taksitler = taksitler.map((p) =>
+            p.id === senet.paymentId
+              ? { ...p, paidAmount: Number(p.amount) || 0, paidDate: tarih }
+              : p
+          );
+        }
+      }
+    }
+    return { taksitler, senetler };
+  };
+
+  const ekstreYukle = async (file) => {
+    if (!file) return;
+    setYuklenenEkstre(file.name);
+    setEkstreIsleniyor(true);
+    setIslemDurumu(`"${file.name}" okunuyor...`);
+    try {
+      const hareketler = await ekstreHareketleriniOku(file);
+      if (!hareketler.length) {
+        setIslemDurumu(
+          "Dosyadan hesap hareketi okunamadı. Tarih ve tutar kolonlarının dolu olduğundan emin olun."
+        );
+        return;
+      }
+
+      const oneriler = eslesmeleriBul(hareketler, {
+        people,
+        properties,
+        contracts,
+        payments,
+        notes: promissoryNotes
+      });
+
+      const uygulanacak = [];
+      const kayitlar = oneriler.map((o) => {
+        const kesin = o.guven === "kesin" && o.hedef;
+        if (kesin) {
+          uygulanacak.push({ tur: o.hedef.tur, id: o.hedef.id, tarih: o.hareket.tarih });
+        }
+        return {
+          id: uid(),
+          date: o.hareket.tarih || "",
+          description: o.hareket.aciklama || "",
+          amount: o.hareket.tutar || 0,
+          direction: o.hareket.yon,
+          guven: o.guven,
+          oneri: o.hedef ? { tur: o.hedef.tur, id: o.hedef.id, etiket: o.hedef.etiket } : null,
+          nedenler: o.nedenler || [],
+          matched: !!kesin,
+          matchLabel: kesin ? o.hedef.etiket : "",
+          appliedAt: kesin ? new Date().toISOString() : null,
+          kaynak: file.name
+        };
+      });
+
+      if (uygulanacak.length) {
+        const { taksitler, senetler } = eslesmeleriIsle(uygulanacak, payments, promissoryNotes);
+        persist(STORAGE_KEYS.payments, taksitler, setPayments);
+        saveNotes(senetler);
+      }
+      saveBankStatements([...kayitlar, ...bankStatements]);
+
+      const kesinSayisi = kayitlar.filter((k) => k.matched).length;
+      const bekleyenSayisi = kayitlar.filter((k) => !k.matched && k.oneri).length;
+      setIslemDurumu(
+        `${kayitlar.length} hareket okundu · ${kesinSayisi} otomatik kapatıldı · ` +
+          `${bekleyenSayisi} hareket onay bekliyor · ` +
+          `${kayitlar.length - kesinSayisi - bekleyenSayisi} eşleşmedi.`
+      );
+    } catch (e) {
+      setIslemDurumu("Ekstre okunamadı: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      setEkstreIsleniyor(false);
+    }
+  };
+
+  // Onay bekleyen tek bir öneriyi kapatır.
+  const ekstreOnerisiniUygula = (kayit) => {
+    if (!kayit || !kayit.oneri) return;
+    const { taksitler, senetler } = eslesmeleriIsle(
+      [{ tur: kayit.oneri.tur, id: kayit.oneri.id, tarih: kayit.date }],
+      payments,
+      promissoryNotes
+    );
+    persist(STORAGE_KEYS.payments, taksitler, setPayments);
+    saveNotes(senetler);
+    saveBankStatements(
+      bankStatements.map((k) =>
+        k.id === kayit.id
+          ? { ...k, matched: true, matchLabel: kayit.oneri.etiket, appliedAt: new Date().toISOString() }
+          : k
+      )
+    );
+    setIslemDurumu(`Hareket, "${kayit.oneri.etiket}" ile eşleştirilip ödendi olarak işaretlendi.`);
+  };
+
+  const bekleyenOnerileriUygula = () => {
+    const bekleyenler = bankStatements.filter((k) => !k.matched && k.oneri);
+    if (!bekleyenler.length) {
+      setIslemDurumu("Onay bekleyen eşleşme yok.");
+      return;
+    }
+    if (!confirm(`${bekleyenler.length} hareket ödendi olarak işaretlenecek. Devam edilsin mi?`)) return;
+    const { taksitler, senetler } = eslesmeleriIsle(
+      bekleyenler.map((k) => ({ tur: k.oneri.tur, id: k.oneri.id, tarih: k.date })),
+      payments,
+      promissoryNotes
+    );
+    persist(STORAGE_KEYS.payments, taksitler, setPayments);
+    saveNotes(senetler);
+    saveBankStatements(
+      bankStatements.map((k) =>
+        !k.matched && k.oneri
+          ? { ...k, matched: true, matchLabel: k.oneri.etiket, appliedAt: new Date().toISOString() }
+          : k
+      )
+    );
+    setIslemDurumu(`${bekleyenler.length} hareket ödendi olarak işaretlendi.`);
+  };
+
+  const ekstreGecmisiTemizle = () => {
+    if (!confirm("Yüklenen ekstre hareketleri listeden kaldırılacak. Ödeme kayıtları korunur. Devam edilsin mi?")) {
+      return;
+    }
+    saveBankStatements([]);
+    setYuklenenEkstre(null);
+    setIslemDurumu("");
+  };
+
   function renderBankaTab() {
     return (
       <>
@@ -7037,30 +7353,50 @@ export default function App() {
         </div>
 
         <div className="hy-panel" style={{ padding: 24 }}>
-          <h3>Banka Ekstresi Yükle / Eşleştir</h3>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap"
+            }}
+          >
+            <h3 style={{ margin: 0 }}>Banka Ekstresi Yükle / Eşleştir</h3>
+            {bankStatements.some((k) => !k.matched && k.oneri) && (
+              <button className="hy-btn primary" onClick={bekleyenOnerileriUygula}>
+                <Check size={16} /> Onay Bekleyenleri İşle
+              </button>
+            )}
+          </div>
+          <p className="muted small">
+            Excel (.xlsx), CSV/TXT, PDF ekstre veya taranmış görüntü yükleyebilirsiniz. Açıklamasında
+            kiracı adı ya da taşınmaz numarası geçen ve tutarı bekleyen bir taksitle birebir uyuşan
+            hareketler otomatik kapatılır; yalnızca tutarı uyuşanlar onayınıza sunulur.
+          </p>
           <input
             type="file"
-            accept=".csv,.xlsx,.txt,.html,.htm,text/plain,text/html,application/pdf,image/*"
+            accept=".csv,.xlsx,.txt,.html,.htm,application/pdf,image/*"
+            disabled={ekstreIsleniyor}
             onChange={(e) => {
-              const file = e.target.files[0];
-              if (file) {
-                setYuklenenEkstre(file.name);
-                setIslemDurumu(`Dosya (${file.name}) başarıyla yüklendi ve doğrulandı. 1 adet eşleşen kira ödemesi bulundu.`);
-              }
+              const file = e.target.files && e.target.files[0];
+              e.target.value = "";
+              if (file) ekstreYukle(file);
             }}
             style={{ marginBottom: 12 }}
           />
 
-          {yuklenenEkstre && (
+          {islemDurumu && (
             <div
               style={{
-                background: "#ECFDF5",
-                color: "#065F46",
+                background: ekstreIsleniyor ? "#EFF6FF" : "#ECFDF5",
+                color: ekstreIsleniyor ? "#1D4ED8" : "#065F46",
                 padding: 12,
                 borderRadius: 8,
                 marginBottom: 16
               }}
             >
+              {ekstreIsleniyor ? "Belge okunuyor: " : ""}
               {islemDurumu}
             </div>
           )}
@@ -7078,31 +7414,78 @@ export default function App() {
                 <th style={{ padding: 10 }}>Tarih</th>
                 <th style={{ padding: 10 }}>Açıklama</th>
                 <th style={{ padding: 10 }}>Tutar</th>
-                <th style={{ padding: 10 }}>Eşleşme Durumu</th>
+                <th style={{ padding: 10 }}>Eşleşme</th>
+                <th style={{ padding: 10 }}>İşlem</th>
               </tr>
             </thead>
             <tbody>
               {bankStatements.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="hy-empty">
-                    Henüz banka hareketi yok.
+                  <td colSpan={5} className="hy-empty">
+                    Henüz banka hareketi yok. Ekstre dosyası yüklediğinizde hareketler burada listelenir.
                   </td>
                 </tr>
               )}
               {bankStatements.map((st) => (
                 <tr key={st.id} style={{ borderBottom: "1px solid #eee" }}>
-                  <td style={{ padding: 10 }}>{fmtDate(st.date)}</td>
-                  <td style={{ padding: 10 }}>{st.description}</td>
-                  <td style={{ padding: 10, fontWeight: "600" }}>
+                  <td style={{ padding: 10 }}>{st.date ? fmtDate(st.date) : "—"}</td>
+                  <td style={{ padding: 10 }}>
+                    {st.description}
+                    {st.nedenler && st.nedenler.length > 0 && (
+                      <div
+                        className="muted small"
+                        style={{ marginTop: 4, lineHeight: 1.45, fontWeight: "400" }}
+                      >
+                        {st.nedenler.join(" ")}
+                      </div>
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      padding: 10,
+                      fontWeight: "600",
+                      color: st.direction === "cikis" ? "var(--danger)" : "inherit"
+                    }}
+                  >
+                    {st.direction === "cikis" ? "-" : ""}
                     {fmtMoney(st.amount)}
                   </td>
                   <td style={{ padding: 10 }}>
-                    <StatusPill status={st.matched ? "Ödendi" : "Bekliyor"} />
+                    {st.matched ? (
+                      <>
+                        <StatusPill status="Ödendi" />
+                        <div className="muted small" style={{ marginTop: 4 }}>
+                          {st.matchLabel}
+                        </div>
+                      </>
+                    ) : st.oneri ? (
+                      <StatusPill status="Bekliyor" />
+                    ) : (
+                      <StatusPill status="Eşleşmedi" />
+                    )}
+                  </td>
+                  <td style={{ padding: 10 }}>
+                    {!st.matched && st.oneri && (
+                      <button
+                        className="hy-btn ghost sm"
+                        onClick={() => ekstreOnerisiniUygula(st)}
+                      >
+                        Ödendi işaretle
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+
+          {bankStatements.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <button className="hy-btn ghost sm" onClick={ekstreGecmisiTemizle}>
+                Ekstre Listesini Temizle
+              </button>
+            </div>
+          )}
         </div>
       </>
     );

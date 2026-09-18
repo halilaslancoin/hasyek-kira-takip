@@ -7,14 +7,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node src/contractParser.test.mjs",
+    "test": "node src/contractParser.test.mjs && node src/statementParser.test.mjs && node src/leaseSchedule.test.mjs",
     "start": "electron .",
     "pack": "electron-builder --mac"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.115.0",
     "lucide-react": "^0.383.0",
-    "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
