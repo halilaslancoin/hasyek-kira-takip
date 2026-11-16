@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Home,
   Store,
@@ -1671,13 +1671,59 @@ export default function App() {
 
   const saveProperty = (p) =>
     persist(STORAGE_KEYS.properties, upsert(properties, p), setProperties);
+  // Mülkü, sözleşmelerini ve onlara bağlı taksit/senetleri ile birlikte siler;
+  // geride sahipsiz borç kaydı kalmaz. Kiracı kişi kayıtları korunur.
   const deletePropertyCompletely = (id) => {
+    const sozlesmeIdleri = new Set(
+      contracts.filter((c) => c.propertyId === id).map((c) => c.id)
+    );
     persist(
       STORAGE_KEYS.properties,
       removeById(properties, id),
       setProperties
     );
+    if (sozlesmeIdleri.size) {
+      persist(
+        STORAGE_KEYS.contracts,
+        contracts.filter((c) => !sozlesmeIdleri.has(c.id)),
+        setContracts
+      );
+      persist(
+        STORAGE_KEYS.payments,
+        payments.filter((p) => !sozlesmeIdleri.has(p.contractId)),
+        setPayments
+      );
+      persist(
+        STORAGE_KEYS.promissoryNotes,
+        promissoryNotes.filter((n) => !sozlesmeIdleri.has(n.contractId)),
+        setPromissoryNotes
+      );
+    }
     setSelectedPropertyId(null);
+  };
+
+  // Taksiti ödendi işaretler: ödenen tutar, ödeme tarihi ve bağlı senet güncellenir.
+  // Kalan borç ayrı tutulmaz; taksitlerden hesaplandığı için kendiliğinden düşer.
+  const taksitiOdendiIsaretle = (paymentId) => {
+    const t = payments.find((x) => x.id === paymentId);
+    if (!t) return;
+    const tarih = isoTarih(new Date());
+    persist(
+      STORAGE_KEYS.payments,
+      payments.map((x) =>
+        x.id === paymentId ? { ...x, paidAmount: Number(x.amount) || 0, paidDate: tarih } : x
+      ),
+      setPayments
+    );
+    if (promissoryNotes.some((n) => n.paymentId === paymentId)) {
+      persist(
+        STORAGE_KEYS.promissoryNotes,
+        promissoryNotes.map((n) =>
+          n.paymentId === paymentId ? { ...n, status: "Ödendi (Senet)" } : n
+        ),
+        setPromissoryNotes
+      );
+    }
   };
   const savePerson = (p) =>
     persist(STORAGE_KEYS.people, upsert(people, p), setPeople);
@@ -2086,6 +2132,53 @@ export default function App() {
     });
     return list;
   }, [payments, contracts, properties, promissoryNotes]);
+
+  // Günlük açılış uyarısı: gecikmiş, bugün vadeli ve süresi dolmak üzere olanlar.
+  const gunlukUyari = useMemo(() => {
+    const satir = (c) => {
+      const sozlesme = contracts.find((x) => x.id === c);
+      const mulk = sozlesme && properties.find((m) => m.id === sozlesme.propertyId);
+      const kisi = sozlesme && people.find((k) => k.id === sozlesme.tenantId);
+      return {
+        mulk: mulk ? mulk.tasinmazNo : "—",
+        kiraci: kisi ? kisi.name : "—"
+      };
+    };
+    const gecikmis = [];
+    const bugun = [];
+    payments.forEach((p) => {
+      const st = paymentStatus(p);
+      if (st === "Ödendi") return;
+      const d = daysUntil(p.dueDate);
+      if (st === "Gecikti") gecikmis.push({ ...satir(p.contractId), tutar: p.amount, vade: p.dueDate });
+      else if (d === 0) bugun.push({ ...satir(p.contractId), tutar: p.amount, vade: p.dueDate });
+    });
+    const yenileme = contracts
+      .filter((c) => c.status === "Aktif")
+      .map((c) => ({ ...satir(c.id), bitis: c.endDate, kalan: daysUntil(c.endDate) }))
+      .filter((r) => r.kalan !== null && r.kalan >= 0 && r.kalan <= 30);
+    return { gecikmis, bugun, yenileme };
+  }, [payments, contracts, properties, people]);
+  const gunlukUyariSayisi =
+    gunlukUyari.gecikmis.length + gunlukUyari.bugun.length + gunlukUyari.yenileme.length;
+  const [gunlukUyariAcik, setGunlukUyariAcik] = useState(false);
+  const gunlukUyariKontrolEdildi = useRef(false);
+  useEffect(() => {
+    if (!loaded || !session?.user?.id || accountRole !== "owner") return;
+    if (gunlukUyariKontrolEdildi.current) return;
+    gunlukUyariKontrolEdildi.current = true;
+    const anahtar = `hasyek:gunluk-uyari:${session.user.id}`;
+    const bugun = isoTarih(new Date());
+    try {
+      if (localStorage.getItem(anahtar) === bugun) return;
+    } catch (e) {}
+    if (gunlukUyariSayisi > 0) {
+      setGunlukUyariAcik(true);
+      try {
+        localStorage.setItem(anahtar, bugun);
+      } catch (e) {}
+    }
+  }, [loaded, session?.user?.id, accountRole, gunlukUyariSayisi]);
 
   const NAV = [
     { id: "ozet", label: "Özet", icon: Home },
@@ -3745,13 +3838,14 @@ export default function App() {
                   <th style={{ padding: "12px" }}>Kira Dönemi</th>
                   <th style={{ padding: "12px" }}>Ödeme tarihi</th>
                   <th style={{ padding: "12px", textAlign: "right" }}>Tutar</th>
+                  <th style={{ padding: "12px" }}></th>
                 </tr>
               </thead>
               <tbody>
                 {filteredPayments.length === 0 ? (
                   <tr>
                     <td
-                      colSpan="6"
+                      colSpan="7"
                       style={{
                         padding: "30px",
                         textAlign: "center",
@@ -3806,6 +3900,16 @@ export default function App() {
                           }}
                         >
                           {fmtMoney(p.amount)}
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "right" }}>
+                          {st !== "Ödendi" && (
+                            <button
+                              className="hy-btn ghost sm"
+                              onClick={() => taksitiOdendiIsaretle(p.id)}
+                            >
+                              <Check size={12} /> Ödendi
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -3975,6 +4079,13 @@ export default function App() {
                         <strong>
                           {active ? fmtMoney(active.rentAmount) : "Boş"}
                         </strong>
+                        {active && (
+                          <div className="muted small" style={{ marginTop: 4, lineHeight: 1.5 }}>
+                            {(people.find((k) => k.id === active.tenantId) || {}).name || "—"}
+                            <br />
+                            Başlangıç: {fmtDate(active.startDate)} · Yenileme: {fmtDate(active.endDate)}
+                          </div>
+                        )}
                       </span>
                       <button
                         className="hy-btn ghost sm"
@@ -4259,6 +4370,24 @@ export default function App() {
               border: "1px solid var(--border)"
             }}
           >
+            <div style={{ fontSize: "13px", fontWeight: "600" }}>
+              {activeContract ? fmtDate(activeContract.startDate) : "—"}
+            </div>
+            <div className="muted small">Başlangıç</div>
+            <div style={{ fontSize: "13px", fontWeight: "600", marginTop: 6 }}>
+              {activeContract ? fmtDate(activeContract.endDate) : "—"}
+            </div>
+            <div className="muted small">Yenileme / bitiş</div>
+          </div>
+
+          <div
+            style={{
+              background: "#F9FAFB",
+              padding: 12,
+              borderRadius: 12,
+              border: "1px solid var(--border)"
+            }}
+          >
             <div style={{ fontSize: "18px", fontWeight: "700" }}>
               {overdueCount} Dönem
             </div>
@@ -4361,13 +4490,14 @@ export default function App() {
                   <th style={{ padding: "10px 12px", textAlign: "right" }}>
                     Ödenen
                   </th>
+                  <th style={{ padding: "10px 12px" }}></th>
                 </tr>
               </thead>
               <tbody>
                 {propPayments.length === 0 ? (
                   <tr>
                     <td
-                      colSpan="6"
+                      colSpan="7"
                       style={{
                         padding: "20px",
                         textAlign: "center",
@@ -4402,6 +4532,16 @@ export default function App() {
                         }}
                       >
                         {fmtMoney(pt.paidAmount || 0)}
+                      </td>
+                      <td style={{ padding: "12px", textAlign: "right" }}>
+                        {paymentStatus(pt) !== "Ödendi" && (
+                          <button
+                            className="hy-btn ghost sm"
+                            onClick={() => taksitiOdendiIsaretle(pt.id)}
+                          >
+                            <Check size={12} /> Ödendi
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -8417,6 +8557,30 @@ export default function App() {
       </main>
 
       {renderTopluBildirimModal()}
+
+      {gunlukUyariAcik && (
+        <Modal title="Günaydın: bugünkü takip listesi" onClose={() => setGunlukUyariAcik(false)}>
+          {[
+            ["Gecikmiş ödemeler", gunlukUyari.gecikmis, "#B91C1C", (r) => `${r.mulk} · ${r.kiraci}: ${fmtMoney(r.tutar)} (vade ${fmtDate(r.vade)})`],
+            ["Bugün vadesi gelenler", gunlukUyari.bugun, "#1D4ED8", (r) => `${r.mulk} · ${r.kiraci}: ${fmtMoney(r.tutar)}`],
+            ["30 gün içinde sözleşmesi bitenler", gunlukUyari.yenileme, "#C2410C", (r) => `${r.mulk} · ${r.kiraci}: ${fmtDate(r.bitis)} (${r.kalan} gün kaldı)`]
+          ]
+            .filter(([, liste]) => liste.length > 0)
+            .map(([baslik, liste, renk, metin]) => (
+              <div key={baslik} style={{ marginBottom: 14 }}>
+                <strong style={{ color: renk }}>{baslik} ({liste.length})</strong>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
+                  {liste.map((r, i) => (
+                    <li key={i}>{metin(r)}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          <button className="hy-btn primary" onClick={() => setGunlukUyariAcik(false)}>
+            Tamam
+          </button>
+        </Modal>
+      )}
 
       <style>{`
         :root {
