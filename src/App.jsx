@@ -777,7 +777,8 @@ export default function App() {
   const [contractScanForm, setContractScanForm] = useState({
     tasinmazNo: "", propertyAd: "", ilce: "", landlordName: "HAS YEK YAPI İNŞAAT TİCARET A.Ş.",
     tenantName: "", tenantPhone: "", tenantTc: "", tenantAddress: "", rentAmount: "", startDate: "",
-    odemeGunu: "", deposit: "", docUrl: null
+    odemeGunu: "", deposit: "", docUrl: null,
+    landlordPhone: "", iban: "", leaseDuration: "", paymentMethod: ""
   });
   // En son başlatılan sözleşme: "Borçlandır"/"Senet oluştur" düğmeleri form
   // doldurulmadan da bu sözleşme üzerinde çalışabilsin.
@@ -943,6 +944,14 @@ export default function App() {
     }
   };
 
+  const handleDeleteQueueItem = (id) => {
+    const item = pdfQueue.find((q) => q.id === id);
+    if (!item) return;
+    if (confirm(`"${item.name}" kuyruktan kaldırılsın mı?`)) {
+      setPdfQueue((prev) => prev.filter((q) => q.id !== id));
+    }
+  };
+
   const handleRetry = async (id) => {
     const item = pdfQueue.find((q) => q.id === id);
     if (!item || !item.file) return;
@@ -1097,6 +1106,10 @@ export default function App() {
       paymentDay: odemeGunu,
       senetSayisi: SENET_SAYISI,
       deposit: Number(contractScanForm.deposit) || 0,
+      landlordPhone: contractScanForm.landlordPhone || "",
+      iban: contractScanForm.iban || "",
+      leaseDuration: contractScanForm.leaseDuration || "",
+      paymentMethod: contractScanForm.paymentMethod || "",
       status: "Aktif",
       createdAt: new Date().toISOString()
     };
@@ -1177,7 +1190,11 @@ export default function App() {
       startDate: d.kiraBaslangic || new Date().toISOString().split("T")[0],
       odemeGunu: d.odemeGunu || "",
       deposit: d.depozitoTutar || "",
-      docUrl: null
+      docUrl: null,
+      landlordPhone: d.malikTel || "",
+      iban: d.iban || "",
+      leaseDuration: d.akdinSuresi || "",
+      paymentMethod: d.odemeSekli || ""
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
 
@@ -1957,6 +1974,17 @@ export default function App() {
   const deleteTenantCompletely = (id) => {
     persist(STORAGE_KEYS.people, removeById(people, id), setPeople);
     setSelectedTenantId(null);
+  };
+  // Sözleşmeyi, ona bağlı taksit ve senetlerle birlikte siler. Kiracı ve mülk kalır.
+  const deleteContractCascade = (id) => {
+    persist(STORAGE_KEYS.contracts, removeById(contracts, id), setContracts);
+    persist(
+      STORAGE_KEYS.payments,
+      payments.filter((p) => p.contractId !== id),
+      setPayments
+    );
+    saveNotes(promissoryNotes.filter((n) => n.contractId !== id));
+    if (sonSozlesmeId === id) setSonSozlesmeId(null);
   };
   const saveContract = (c) =>
     persist(STORAGE_KEYS.contracts, upsert(contracts, c), setContracts);
@@ -5253,6 +5281,24 @@ export default function App() {
               >
                 <Trash2 size={14} /> Sil
               </button>
+              {tenantContracts.map((c) => (
+                <button
+                  key={c.id}
+                  className="hy-btn danger sm"
+                  onClick={() => {
+                    if (
+                      confirm(
+                        `${c.startDate || ""} tarihli sözleşme, taksit ve senetleriyle birlikte silinsin mi? Bu işlem geri alınamaz.`
+                      )
+                    ) {
+                      deleteContractCascade(c.id);
+                    }
+                  }}
+                >
+                  <Trash2 size={14} /> Sözleşmeyi Sil
+                  {tenantContracts.length > 1 ? ` (${c.startDate || ""})` : ""}
+                </button>
+              ))}
               {prop && (
                 <button
                   className="hy-btn ghost sm"
@@ -6202,6 +6248,32 @@ export default function App() {
                   placeholder="30000"
                 />
               </Field>
+              <Field label="Kiraya Verenin Telefonu">
+                <input
+                  value={contractScanForm.landlordPhone}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, landlordPhone: e.target.value })}
+                />
+              </Field>
+              <Field label="Akdin Süresi">
+                <input
+                  value={contractScanForm.leaseDuration}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, leaseDuration: e.target.value })}
+                  placeholder="1 Yıl"
+                />
+              </Field>
+              <Field label="Ödeme Şekli">
+                <input
+                  value={contractScanForm.paymentMethod}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, paymentMethod: e.target.value })}
+                />
+              </Field>
+              <Field label="IBAN">
+                <input
+                  value={contractScanForm.iban}
+                  onChange={(e) => setContractScanForm({ ...contractScanForm, iban: e.target.value })}
+                  placeholder="TR00 0000 0000 0000 0000 0000 00"
+                />
+              </Field>
 
               <div className="span-2" style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
                 <button className="hy-btn primary" onClick={() => handleActionStartContract()}>
@@ -6432,6 +6504,13 @@ export default function App() {
                         {item.progressText || "Belge taranıyor..."}
                       </span>
                     )}
+                    <button
+                      className="hy-btn danger sm"
+                      style={{ marginLeft: "auto" }}
+                      onClick={() => handleDeleteQueueItem(item.id)}
+                    >
+                      <Trash2 size={14} /> Sil
+                    </button>
                   </div>
                 </div>
               ))
